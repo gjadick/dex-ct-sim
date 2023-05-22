@@ -128,8 +128,6 @@ class ScannerGeometry:
         self.N_channels = N_channels
         self.gamma_fan = gamma_fan
         self.dgamma_channel = gamma_fan/N_channels
-        #self.gammas = np.arange(-gamma_fan/2, gamma_fan/2, self.dgamma_channel)    
-        #self.gammas = np.arange(-gamma_fan/2 + self.dgamma_channel/2, gamma_fan/2, self.dgamma_channel)    
         if N_channels%2==1:        # odd
             self.gammas = np.arange(-gamma_fan/2 + self.dgamma_channel/2, gamma_fan/2, self.dgamma_channel)    
         else:

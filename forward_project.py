@@ -154,7 +154,8 @@ def siddons(src, trg, N, dR, EPS=1e-8):
 
 
 
-def detect_transmitted_sino(E, I0_E, sino_T_E, ideal=False, noise=True, eid=True):
+def detect_transmitted_sino(E, I0_E, sino_T_E, detector_file='input/detector/eta.npy',
+                            ideal=False, noise=True, eid=True):
     '''
     Function to calculate noisy detected signal in a single sinogram pixel.
 
@@ -166,6 +167,8 @@ def detect_transmitted_sino(E, I0_E, sino_T_E, ideal=False, noise=True, eid=True
         List of number of photons in each corresponding energy bin.
     T_E : 1D np.array
         % of photons transmitted after the phantom, exp(-u*L), in each energy bin.
+    detector_file : str
+        path to numpy float32 file with the detective efficiency data [ E, eta(E) ]
     ideal : bool, optional
         Whether the detection function is ideal (eta=1) or not. The default is False.
     noise : bool, optional
@@ -188,11 +191,12 @@ def detect_transmitted_sino(E, I0_E, sino_T_E, ideal=False, noise=True, eid=True
     if ideal:
         eta_E = 1.0
     else:
-        matcomp_det = 'Mo'
-        density_det =   10.22 # [g/cm^3]
-        t_det =   0.60  # [cm]
-        eta_E = 1.0 - np.exp(-density_det * t_det * xc.mixatten(matcomp_det, E))
-            
+        data = np.fromfile(detector_file, dtype=np.float32)
+        N_det_energy = len(data)//2
+        det_E = data[:N_det_energy]      # 1st half is energies
+        det_eta_E = data[N_det_energy:]    # 2nd half is detective efficiencies
+        eta_E = np.interp(E, det_E, det_eta_E)  # interp file to target energies
+    
     # get energy bin sizes
     dE = np.append([E[0]], E[1:]-E[:-1]) # 1st energy bin is 0 to E[0]
 
