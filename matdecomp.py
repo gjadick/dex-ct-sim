@@ -78,14 +78,15 @@ def optimize_sino(Sino_gg, ee, i0, mus, n_iters, verbose=True):
 
 
 
-def detresponse(E, ideal=False, eid=True):
+def detresponse(E, ideal=False, eid=True, detector_file='input/detector/eta.npy'):
     if ideal:
         eta_E = 1.0
     else:
-        matcomp_det = 'Mo'
-        density_det = 10.22 #[g/cm^3]
-        t_det = 0.60 # [cm]
-        eta_E = 1.0 - np.exp(-density_det * t_det * xc.mixatten(matcomp_det,E))
+        data = np.fromfile(detector_file, dtype=np.float32)
+        N_det_energy = len(data)//2
+        det_E = data[:N_det_energy]      # 1st half is energies
+        det_eta_E = data[N_det_energy:]    # 2nd half is detective efficiencies
+        eta_E = np.interp(E, det_E, det_eta_E)  # interp file to target energies
     
     if eid:
         return E*eta_E  
