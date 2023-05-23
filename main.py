@@ -284,8 +284,8 @@ if __name__ == '__main__':
     # (this requires existing SE-CT output files for each spectrum/dose pair)
     for phantom in phantoms:
         for spec_id1, spec_id2, D1, D2 in [
-                                   #['140kV', '80kV', 5, 5],
-                                   #['detunedMV', '80kV', 9, 1],
+                                   ['140kV', '80kV', 5, 5],
+                                   ['detunedMV', '80kV', 9, 1],
                                   ]:
             
             # reload spectra, so doses are initialized at 1 mGy before scaling

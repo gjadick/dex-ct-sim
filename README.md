@@ -1,5 +1,12 @@
 # dex-ct-sim
 Dual-energy CT raytracing simulator with basis material decomposition.
+These scripts are for:
+1. Generating single-energy CT sinograms using Siddons raytracing
+2. Reconstructing CT images using fan-beam filtered back-projection
+3. Generating dual-energy CT basis material sinograms using Gauss-Newton
+   decomposition and reconstructing basis material images using FFBP.
+
+
 
 ## main.py
 Main file for running the dual-energy CT simulation. There are three classes 
@@ -32,4 +39,5 @@ Script used to generate plots to analyze data output from main.
   
   
 <sup>1</sup>Siddon, Robert L. "Fast calculation of the exact radiological path for a three‐dimensional CT array." Medical physics 12, no. 2 (1985): 252-255.
+
 <sup>2</sup>D. Rigie and P. J. La Riviere, “An efficient spectral CT material decomposition method using the Gauss–Newton algorithm,” Proc. 2015 IEEE Medical Imaging Conference (2015).
