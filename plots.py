@@ -6,12 +6,10 @@ Created on Mon Apr 24 07:50:57 2023
 @author: gjadick
 """
 
-import os 
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy.interpolate import RegularGridInterpolator
 
-from main import get_out_dir_se, get_out_dir_de
 from system import ScannerGeometry, Phantom, Spectrum
 from matdecomp import mat1, mat2, matcomp1, matcomp2
 import xcompy as xc
@@ -21,7 +19,7 @@ import xcompy as xc
 
 # some plotting params
 figdir = 'output/figs/'
-savefig = False
+savefig = True
 
 plt.rcParams.update({
     # figure
@@ -59,7 +57,7 @@ def bf(string):
     return "\\textbf{"+string+"}"
 
 
-def label_panels(ax, c='k', loc='outside', dx=-0.04, dy=0.09, fontsize=None,
+def label_panels(ax, c='k', loc='outside', dx=-0.06, dy=0.09, fontsize=None,
                  label_type='lowercase', label_format='({})'):
     '''
     Function to label panels of multiple subplots in a single figure.
@@ -97,7 +95,6 @@ def label_panels(ax, c='k', loc='outside', dx=-0.04, dy=0.09, fontsize=None,
         yloc = ymin + (ymax-ymin)*yp
         
         label = labels[i]
-        print(xloc, yloc)
         axi.text(xloc, yloc, bf(label), color=c, fontsize=fontsize,
           va='center', ha='center')
         
@@ -153,9 +150,6 @@ roi_dict = { 'lung'  :   [5,  5,  291, 271, 291, 280],
              'prost' :   [15, 15, 248, 271, 274, 280] }
 roi_dict['pelvis_metal'] = roi_dict['pelvis']
 roi_dict['lung_metal'] = roi_dict['lung']
-
-# monoenergies for VMIs
-E0s = [60, 200]
 
 
 def make_vmi(E0, M1, M2, 
@@ -325,6 +319,7 @@ for axi in ax:
 fig.tight_layout(pad=1.1)
 fig.legend(handles=legend_elements, loc='center right')
 plt.subplots_adjust(right = 0.86)
+label_panels(ax, dy=0.06)
 
 if savefig:
     plt.savefig(figdir+f'rmse{phantnames}.pdf')
@@ -340,8 +335,8 @@ phantnames = f'_{int(100*ramp)}ramp'
 legend_elements = []
 
 for i, [phantom, Evals] in enumerate([
-             ['pelvis',       np.arange(50, 155, 10)],  
-             ['pelvis_metal', np.arange(100, 305, 20)]]):  
+             ['pelvis',       np.arange(50, 175, 10)],  
+             ['pelvis_metal', np.arange(100, 345, 20)]]):  
     ax[i].set_title(phantom.replace('_metal', ' with metal'))
     phantnames += f'_{phantom}'
     
@@ -349,136 +344,67 @@ for i, [phantom, Evals] in enumerate([
     dx, dy, x0, y0, x02, y02 = roi_dict[phantom]
 
     # single specs
-    tlw=1.5
-    col='k'
-    for spec, D, ls in  [
-            ['80kV', 10, '--'], 
-            ['120kV',10,':'], 
-            ['140kV',10,'-'],
-            ]:
+    tlw, col = 1.5, 'k'
+    for spec, D, ls in  [['80kV', 10, '--'], 
+                        ['120kV', 10, ':' ], 
+                        ['140kV', 10, '-' ]]:
+        
         M = get_img_ct(ct, phantom, spec, D)
         u1, v1 = measure_roi(M, [x0, y0, dx, dy])#, ax=ax[i])   # signal
         u2, v2 = measure_roi(M, [x02, y02, dx, dy])#, ax=ax[i]) # background
         snr = (u1-u2)/np.sqrt(v1 + v2)
-        print(phantom, spec, snr)
+        
+        print(phantom, spec, f'SNR = {snr:.3f}')
         ax[i].axhline(snr, lw=tlw, color=col, ls=ls, label=spec)
         if i==0:
             legend_elements.append(plt.Line2D([0], [0], color=col, ls=ls,  label=spec))
 
     # dual specs
     for spec1, spec2, D1, D2, ls, sid in [
-            ['140kV',     '80kV', 5, 5,  'bs-', '140-80kV'],
-            ['detunedMV', '80kV', 9, 1,  'ro-', 'MV-80kV'],
-            ]:
+            ['140kV',     '80kV', 5, 5,  'bs', '140-80kV'],
+            ['detunedMV', '80kV', 9, 1,  'ro', 'MV-80kV']]:
+        
         M_m1, M_m2 = get_img_basismats(ct, phantom, spec1, spec2, D1, D2)
-
+        
+        Evals_all = np.arange(Evals[0], Evals[-1]+1, 1)  # get smooth curve
         snrs = []
-        for E0 in Evals:
+        for E0 in Evals_all:
             vmi = make_vmi(E0, M_m1, M_m2)
             u1, v1 = measure_roi(vmi, [x0, y0, dx, dy])#, ax=ax[i])   # signal
             u2, v2 = measure_roi(vmi, [x02, y02, dx, dy])#, ax=ax[i]) # background
             snr = (u1-u2)/np.sqrt(v1 + v2)
             snrs.append(snr)
              
-        ax[i].plot(Evals, snrs, ls, markerfacecolor="None", label=sid)
+        # plot and print the maximum
+        print(phantom, sid, f'max SNR = {np.max(snrs):.3f} @ {Evals_all[np.argmax(snrs)]} keV')
+        ax[i].plot(Evals_all, snrs, ls[0]+'-')
+        # add markers to identify curves in black and white
+        ax[i].plot(Evals, snrs[::Evals[1]-Evals[0]], ls, markerfacecolor="None")
+        
         if i==0:
             legend_elements.append( plt.Line2D([0], [0], color=ls[0], marker=ls[1], markerfacecolor='None', label=sid) )
 
+for axi in ax:
+    axi.set_xlabel('VMI energy [keV]')
+    x0,x1 = axi.get_xlim()
+    y0,y1 = axi.get_ylim()
+    axi.set_aspect(0.9*(x1-x0)/(y1-y0))
 
-    for axi in ax:
-        axi.set_xlabel('VMI energy [keV]')
-        x0,x1 = axi.get_xlim()
-        y0,y1 = axi.get_ylim()
-        axi.set_aspect(0.9*(x1-x0)/(y1-y0))
+fig.tight_layout(pad=1.1)
+fig.legend(handles=legend_elements, loc='center right')
+plt.subplots_adjust(right=0.86)  
+label_panels(ax, dy=0.06)
 
-    legend_elements = [
-        plt.Line2D([0], [0], color='r', marker='o', markerfacecolor='None', label='MV-80kV'),
-        plt.Line2D([0], [0], color='b', marker='s', markerfacecolor='None', label='140-80kV'),
-        plt.Line2D([0], [0], color='k', ls='--',  label='80kV'),
-        plt.Line2D([0], [0], color='k', ls=':',  label='120kV'),
-        plt.Line2D([0], [0], color='k', ls='-',  label='140kV'),
-                   ]
-    fig.tight_layout(pad=1.1)
-    fig.legend(handles=legend_elements, loc='center right')
-    plt.subplots_adjust(right=0.86)  
-
-    if savefig:
-        plt.savefig(figdir+f'snr{phantnames}.pdf')
-    plt.show()
+if savefig:
+    plt.savefig(figdir+f'snr{phantnames}.pdf')
+plt.show()
 
     
-    
-plot_vmis = False
-crop = True
-if plot_vmis:
-    
-    for E0 in [200, 300, 400]: #[60, 100, 200]:
-        for spec1, spec2, D1, D2, ls, sid in [
-                ['140kV',     '80kV', 1,   1,  'bs-', '140kV-80kV VMI'],
-                ['detunedMV', '80kV', 10 , 1,  'ro-', 'MV-80kV VMI'],
-                ]:
-            _, _, x0, y0, x02, y02 = np.array(roi_dict[phantom]) - (N_matrix - N_crop)//2
-            dx, dy, _, _, _, _ = roi_dict[phantom]
-            
-            #fig, ax = plt.subplots(1,5,dpi=300, figsize=[10,2.5])
-            fig, ax = plt.subplots(1,2,dpi=300, figsize=[8,3])
-            fig.suptitle(f'{E0} keV, {spec1}-{spec2}', y=.95)
-            ax[0].set_ylabel(f'{E0} keV, {spec1}-{spec2}')
-            fig.subplots_adjust(top=0.8)
-            
-            for i, [phantom, WL, WW, N_crop] in enumerate([
-                        #['lung',       -500, 200,  200 ],
-                        #['lung_metal', -500, 200,  200 ],
-                        ['pelvis',       50, 400,  200],
-                        ['pelvis_metal', 50, 400 , 200 ],
-                        #['prost',        50, 200,  200],
-                        ]):
-        
-                _, _, x0, y0, x02, y02 = np.array(roi_dict[phantom]) - (N_matrix - N_crop)//2
-                dx, dy, _, _, _, _ = roi_dict[phantom]
-                hu_kwargs = {'cmap':'gray', 'vmin':WL-WW/2, 'vmax':WL+WW/2}
-     
-                s1_dir = rootd+f'{phantom}/{spec1}/{geo_id}/{int(1000*D1)}uGy/'
-                s2_dir = rootd+f'{phantom}/{spec2}/{geo_id}/{int(1000*D2)}uGy/'
-                M_s1 = np.fromfile(s1_dir+'recon512_000.npy', dtype=np.float32).reshape([512,512]).T
-                M_s2 = np.fromfile(s2_dir+'recon512_000.npy', dtype=np.float32).reshape([512,512]).T
-                
-                # basis materials
-                md_dir = rootd+f'matdecomp/{geo_id}/{phantom}/{spec1}_{spec2}_{int(1000*D1)}uGy_{int(1000*D2)}uGy/'
-                M_m1, M_m2 = get_Mmat(geo_id, phantom, spec1, spec2, D1, D2)
 
-                # crop
-                if not crop: 
-                    N_crop = 400
-                if True:
-                    M_s1 = M_s1[r0-N_crop//2:r0+N_crop//2, r0-N_crop//2:r0+N_crop//2]
-                    M_s2 = M_s2[r0-N_crop//2:r0+N_crop//2, r0-N_crop//2:r0+N_crop//2]
-                    M_m1 = M_m1[r0-N_crop//2:r0+N_crop//2, r0-N_crop//2:r0+N_crop//2]
-                    M_m2 = M_m2[r0-N_crop//2:r0+N_crop//2, r0-N_crop//2:r0+N_crop//2]
-                
-                vmi = make_vmi(E0, M_m1, M_m2)
-                m = ax[i].imshow(vmi, **hu_kwargs)
-                u1, v1 = measure_roi(vmi, [x0, y0, dx, dy], ax=ax[i])   # signal
-                u2, v2 = measure_roi(vmi, [x02, y02, dx, dy], ax=ax[i]) # background
-                  
-                # make_cbar(ax[i], m, 'HU')        
-                ax[i].set_xticks([])
-                ax[i].set_yticks([])
-                ax[i].text(12,12,f'W/L = {WW}/{WL}',color='w', ha='left', va='top', bbox=dict(facecolor='k'))
-                ax[i].set_title(phantom.replace('_', ' ').replace('prost', 'prostate'))
-            fig.tight_layout(pad=0)
-            fname = f'vmi_{spec1}_{spec2}_{E0}keV.pdf'
-            if crop:
-                fname = fname.replace('.pdf', '_crop.pdf')
-            plt.savefig(figdir+fname)
-            plt.show()
-        
-        
-    
-#%%
+
+#%% All images per DE-CT acquisition (SE-CTs, BMIs, VMIs)
 
 E0s = [80, 300]
-ramp = 0.8
 
 for phantom, WL, WW, N_crop in [
             ['pelvis', 50, 500, 380],
@@ -489,24 +415,15 @@ for phantom, WL, WW, N_crop in [
     mat2_kwargs = {'cmap':'gray', 'vmin':0, 'vmax':2.2}
 
     for spec1, spec2, D1, D2 in spec_pairs:
-
         
-        geo_id = '60cm_100cm_47fan_1200view_800col'
-        M_s1 = get_ssmat(geo_id, phantom, spec1, D1, ramp=ramp)            
-        M_s2 = get_ssmat(geo_id, phantom, spec2, D2, ramp=ramp)      
-        M_m1, M_m2 = get_Mmat(geo_id, phantom, spec1, spec2, D1, D2, ramp=ramp)
+        fig, ax = plt.subplots(3,2, dpi=300, figsize=[6.3,8])
 
-        M_s1 = M_s1[r0-N_crop//2:r0+N_crop//2, r0-N_crop//2:r0+N_crop//2]
-        M_s2 = M_s2[r0-N_crop//2:r0+N_crop//2, r0-N_crop//2:r0+N_crop//2]
-        M_m1 = M_m1[r0-N_crop//2:r0+N_crop//2, r0-N_crop//2:r0+N_crop//2]
-        M_m2 = M_m2[r0-N_crop//2:r0+N_crop//2, r0-N_crop//2:r0+N_crop//2]
-            
+        M_s1 = get_img_ct(ct, phantom, spec1, D1, crop=N_crop)
+        M_s2 = get_img_ct(ct, phantom, spec2, D2, crop=N_crop)
+        M_m1, M_m2 = get_img_basismats(ct, phantom, spec1, spec2, D1, D2, crop=N_crop)
         vmi1 = make_vmi(E0s[0], M_m1, M_m2)
         vmi2 = make_vmi(E0s[1], M_m1, M_m2)
         
- 
-        fig, ax = plt.subplots(3,2, dpi=300, figsize=[6.3,8])
-
         # COLUMN 0 - raw images
         ax[0,0].set_title(f'{spec1} ({D1}mGy)')
         m = ax[0,0].imshow(M_s1, **hu_kwargs)
@@ -536,9 +453,13 @@ for phantom, WL, WW, N_crop in [
 
         for axi in ax.ravel():
             axi.axis('off')
+            
         fig.tight_layout(pad=0.1)
-        fname = f'{phantom}_{spec1}_{spec2}_{int(D1)}mGy_{int(D2)}mGy_ramp{int(100*ramp)}_{int(E0s[0])}keV_{int(E0s[1])}keV.pdf'
-        plt.savefig(figdir+fname)
+        label_panels(ax, dy=0.05)
+        
+        if savefig:
+            fname = f'{phantom}_{spec1}_{spec2}_{int(D1)}mGy_{int(D2)}mGy_ramp{int(100*ramp)}_{int(E0s[0])}keV_{int(E0s[1])}keV.pdf'
+            plt.savefig(figdir+fname)
         plt.show()
 
 
