@@ -190,7 +190,7 @@ def crop_img(M, crop):
 def get_img_ct(ct, phantom_id, spec_id, dose, crop=None,
                N_matrix=N_matrix, FOV=FOV, ramp=ramp):
     img_dir = f'output/{ct.geo_id}/{phantom_id}/{spec_id}/{int(dose*1000):04}uGy/'     
-    fname = f'recon_{N_matrix}_{int(FOV):02}cm_{int(ramp*100):03}ramp.npy' 
+    fname = f'recon_{N_matrix}_{int(FOV):02}cm_{int(ramp*100):03}ramp.bin' 
     M = np.fromfile(img_dir+fname, dtype=np.float32).reshape([N_matrix, N_matrix])
     if crop is not None:
         M = crop_img(M, crop)
@@ -199,7 +199,7 @@ def get_img_ct(ct, phantom_id, spec_id, dose, crop=None,
 def get_img_basismats(ct, phantom_id, spec_id1, spec_id2, dose1, dose2, crop=None,
                       N_matrix=N_matrix, FOV=FOV, ramp=ramp):
     img_dir = f'output/{ct.geo_id}/{phantom_id}/matdecomp_{spec_id1}_{spec_id2}/{int(dose1*1000):04}uGy_{int(dose2*1000):04}uGy/'     
-    base_fname = f'recon_{N_matrix}_{int(FOV):02}cm_{int(ramp*100):03}ramp.npy' 
+    base_fname = f'recon_{N_matrix}_{int(FOV):02}cm_{int(ramp*100):03}ramp.bin' 
     M1 = np.fromfile(img_dir+'mat1_'+base_fname, dtype=np.float32).reshape([N_matrix, N_matrix])
     M2 = np.fromfile(img_dir+'mat2_'+base_fname, dtype=np.float32).reshape([N_matrix, N_matrix])
     if crop is not None:

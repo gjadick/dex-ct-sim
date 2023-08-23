@@ -154,7 +154,7 @@ def siddons(src, trg, N, dR, EPS=1e-8):
 
 
 
-def detect_transmitted_sino(E, I0_E, sino_T_E, detector_file='input/detector/eta.npy',
+def detect_transmitted_sino(E, I0_E, sino_T_E, detector_file='input/detector/eta.bin',
                             ideal=False, noise=True, eid=True):
     '''
     Function to calculate noisy detected signal in a single sinogram pixel.
@@ -253,7 +253,7 @@ def raytrace_fanbeam(ct, phantom, spec, u_dict, use_cache=True, verbose=True):
     # check whether a cached sino exists from previous run
     # the transmission through the phantom in spec's energy bins for given ct geometry 
     cache_dir  = f'./output/cache/{ct.geo_id}/{phantom.name}/{spec.name}/'
-    cache_file = cache_dir + 'sino.npy'
+    cache_file = cache_dir + 'sino.bin'
     if use_cache and os.path.exists(cache_file):
         print('using cached transmission sino,', cache_dir)
         sino_T_E = np.fromfile(cache_file, dtype=np.float32).reshape([ ct.N_proj, ct.N_channels, len(spec.E)])

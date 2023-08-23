@@ -78,7 +78,7 @@ def optimize_sino(Sino_gg, ee, i0, mus, n_iters, verbose=True):
 
 
 
-def detresponse(E, ideal=False, eid=True, detector_file='input/detector/eta.npy'):
+def detresponse(E, ideal=False, eid=True, detector_file='input/detector/eta.bin'):
     if ideal:
         eta_E = 1.0
     else:

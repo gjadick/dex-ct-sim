@@ -10,17 +10,19 @@ Script for:
     (2) reconstructing CT images using fan-beam filtered back-projection
     (3) generating dual-energy CT basis material sinograms using Gauss-Newton 
         decomposition and reconstructing basis material images using FFBP.
+
+Change the global param `GPU` to False if there is no Nvidia GPU available.
 """
 
 import os
 import numpy as np
-
 import xcompy as xc
-
 from system import Spectrum, ScannerGeometry, Phantom, get_matcomp_dict
 from forward_project import raytrace_fanbeam, detect_transmitted_sino
 from back_project import pre_process, get_recon_coords, do_recon, do_recon_gpu
 from matdecomp import do_matdecomp_gn
+
+GPU = True      # Nvidia GPU available to accelerate recon? 
 
 
 def get_out_dir_se(ct, phantom, spec, dose):
@@ -67,10 +69,9 @@ def get_sino(out_dir, ct, phantom, spec):
         os.makedirs(out_dir, exist_ok=True)
 
     # get the linear attenuation coefficients for the spectrum energies
-    matcomp_dict = get_matcomp_dict(phantom.matcomp_filename)
     u_dict = {}
-    for mat in matcomp_dict:
-        density, matcomp = matcomp_dict[mat] 
+    for mat in phantom.matcomp_dict:
+        density, matcomp = phantom.matcomp_dict[mat] 
         u_E = density * xc.mixatten(matcomp, spec.E)
         u_E[np.isnan(u_E)] = 0.0
         u_dict[mat] = u_E
@@ -83,8 +84,8 @@ def get_sino(out_dir, ct, phantom, spec):
     sino_log = np.log(sino0/sino_raw)
 
     # save sinos
-    sino_raw.astype(np.float32).tofile(out_dir+'sino_raw.npy')
-    sino_log.astype(np.float32).tofile(out_dir+'sino_log.npy')
+    sino_raw.astype(np.float32).tofile(out_dir+'sino_raw.bin')
+    sino_log.astype(np.float32).tofile(out_dir+'sino_log.bin')
 
     return sino_raw, sino_log
 
@@ -151,7 +152,7 @@ def get_recon(out_dir, sino_log, ct, N_matrix, FOV, ramp,  use_gpu=True, HU=Fals
             recon = 1000*(recon - spec.u_water)/(spec.u_water - spec.u_air)
     
     # save recons
-    recon_fname = out_dir+f'{name}recon_{N_matrix}_{int(FOV):02}cm_{int(ramp*100):03}ramp.npy' 
+    recon_fname = out_dir+f'{name}recon_{N_matrix}_{int(FOV):02}cm_{int(ramp*100):03}ramp.bin' 
     recon.astype(np.float32).tofile(recon_fname)  
     
     return recon
@@ -201,8 +202,8 @@ def get_matdecomp(ct, phantom, spec1, spec2, D1, D2, N_matrix, FOV, ramp, n_iter
         os.makedirs(out_dir, exist_ok=True)
         
     # read the input single-energy sinograms
-    sino_fname1 = get_out_dir_se(ct, phantom, spec1, D1)+'sino_raw.npy'
-    sino_fname2 = get_out_dir_se(ct, phantom, spec2, D2)+'sino_raw.npy'
+    sino_fname1 = get_out_dir_se(ct, phantom, spec1, D1)+'sino_raw.bin'
+    sino_fname2 = get_out_dir_se(ct, phantom, spec2, D2)+'sino_raw.bin'
     sino1 = np.fromfile(sino_fname1, dtype=np.float32).reshape([ct.N_proj, ct.N_channels])
     sino2 = np.fromfile(sino_fname2, dtype=np.float32).reshape([ct.N_proj, ct.N_channels])
     
@@ -221,10 +222,10 @@ def get_matdecomp(ct, phantom, spec1, spec2, D1, D2, N_matrix, FOV, ramp, n_iter
         sino_mat = Sino_aa[:,:,i]
 
         # save basis material sinogram
-        sino_mat.astype(np.float32).tofile(out_dir + f'mat{i+1}_sino.npy')
+        sino_mat.astype(np.float32).tofile(out_dir + f'mat{i+1}_sino.bin')
         
         # reconstruct and save basis material image
-        get_recon(out_dir, sino_mat, ct, N_matrix, FOV, ramp, HU=False, name=f'mat{i+1}_')
+        get_recon(out_dir, sino_mat, ct, N_matrix, FOV, ramp, use_gpu=GPU, HU=False, name=f'mat{i+1}_')
         
     return Sino_aa
 
@@ -232,25 +233,23 @@ def get_matdecomp(ct, phantom, spec1, spec2, D1, D2, N_matrix, FOV, ramp, n_iter
 
 
 if __name__ == '__main__':
-        
+    
     # recon parameters
     N_matrix = 512  # num pixels in recon matrix
     FOV = 50.0      # cm
     ramp = 0.8      # cutoff % of Nyquist frequency
-    
+
     # geometry 
     ct = ScannerGeometry(N_channels=800, N_proj=1200, gamma_fan=0.8230337,   # 47 deg
                       SID=60.0, SDD=100.0, pxshape='rect')  
     
-    # phantoms 
-    phantoms = []
-    for id_phantom in ['pelvis', 'pelvis_metal']:
-        filename_phantom = f'input/phantom/xcat_{id_phantom}_uint8_512_512_1_1mm.bin'
-        filename_matcomp = 'input/phantom/xcat_elemental_comps.txt'
-        phantom = Phantom(filename_phantom, id_phantom, filename_matcomp, 512, 512, 1, ind=0) 
-        phantoms.append(phantom)
+    # phantom 
+    id_phantom = 'cylinder_5mats'
+    filename_phantom = f'input/phantom/cylinder_5mats_512x512_uint8.bin'
+    filename_matcomp = 'input/phantom/cylinder_5mats_matcomp.txt'
+    phantom = Phantom(id_phantom, filename_phantom, filename_matcomp, Nx=512, Ny=512, Nz=1, ind=0) 
  
-    # spectra
+    # spectra -- can choose any dual energy combo from these options
     filepath_spectrum = 'input/spectrum/'
     filename_dict = {
         '6MV':       "Accuray_treatment6MV.csv", 
@@ -258,46 +257,37 @@ if __name__ == '__main__':
         '80kV':      "spec80.mat", 
         '120kV':     "spec120.mat", 
         '140kV':     "spec140.mat"     }
-    
-        
-    # 1st -- single-energy CT acquisitions
-    for phantom in phantoms: 
-        for spec_id, doses in [['80kV',   [1, 5, 10]],
-                                ['120kV', [10]], 
-                                ['140kV', [5, 10]], 
-                                ['detunedMV', [9, 10]]
-                               ]: 
-            for dose in doses:  
-                
-                # reload spectrum, so dose is initialized at 1 mGy before scaling
-                spec = Spectrum(filepath_spectrum+filename_dict[spec_id], spec_id)
-                spec.rescale_I0(ct.A_iso * dose / ct.N_proj)  # rescale by pixel area / number of views
-                
-                out_dir = get_out_dir_se(ct, phantom, spec, dose)
-                print('\n', out_dir)
+   
 
-                sino_raw, sino_log = get_sino(out_dir, ct, phantom, spec)    
-                recon_HU = get_recon(out_dir, sino_log, ct, N_matrix, FOV, ramp, HU=True, spec=spec)
+    # main loop over all the dual energy spectral combinations
+    #     spec_id1, spec_id2 -- spectrum names (see filename_dict above)
+    #     D1, D2 -- corresponding dose in mGy
 
+    for spec_id1, spec_id2, D1, D2 in [['140kV', '80kV', 5, 5]]:
+
+        ### 1st -- single energy acquisitions with each spectrum
+        for spec_id, dose in [[spec_id1, D1], [spec_id2, D2]]:
+     
+            # load spectrum with dose initialized at 1 mGy before scaling
+            spec = Spectrum(filepath_spectrum+filename_dict[spec_id], spec_id)
+            spec.rescale_I0(ct.A_iso * dose / ct.N_proj)  # rescale by pixel area / number of views
                 
-    # 2nd -- dual-energy CT material decomposition
-    # (this requires existing SE-CT output files for each spectrum/dose pair)
-    for phantom in phantoms:
-        for spec_id1, spec_id2, D1, D2 in [
-                                   ['140kV', '80kV', 5, 5],
-                                   ['detunedMV', '80kV', 9, 1],
-                                  ]:
+            out_dir = get_out_dir_se(ct, phantom, spec, dose)
+            print(f'\n{out_dir}')
+
+            sino_raw, sino_log = get_sino(out_dir, ct, phantom, spec)    
+            recon_HU = get_recon(out_dir, sino_log, ct, N_matrix, FOV, ramp, use_gpu=GPU, HU=True, spec=spec)
+
+        ### 2nd -- do material decomposition
+        spec1 = Spectrum(filepath_spectrum+filename_dict[spec_id1], spec_id1)
+        spec2 = Spectrum(filepath_spectrum+filename_dict[spec_id2], spec_id2)
+        spec1.rescale_I0(ct.A_iso * D1 / ct.N_proj) 
+        spec2.rescale_I0(ct.A_iso * D2 / ct.N_proj) 
             
-            # reload spectra, so doses are initialized at 1 mGy before scaling
-            spec1 = Spectrum(filepath_spectrum+filename_dict[spec_id1], spec_id1)
-            spec2 = Spectrum(filepath_spectrum+filename_dict[spec_id2], spec_id2)
-            spec1.rescale_I0(ct.A_iso * D1 / ct.N_proj) 
-            spec2.rescale_I0(ct.A_iso * D2 / ct.N_proj) 
-            
-            # do material decomposition into ICRU tissue and bone
-            get_matdecomp(ct, phantom, spec1, spec2, D1, D2, N_matrix, FOV, ramp, n_iters=50)
+        # do material decomposition into ICRU tissue and bone
+        get_matdecomp(ct, phantom, spec1, spec2, D1, D2, N_matrix, FOV, ramp, n_iters=50)
     
-    
+        print(f'matdecomp finished for {spec_id1}-{spec_id2}') 
     
     
     
