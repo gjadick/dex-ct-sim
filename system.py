@@ -12,41 +12,33 @@ from scipy.io import loadmat
 import xcompy as xc
 
 
-def get_matcomp_dict(filename):
-    '''
-    Create dictionary of material compositions.
-    The phantom file is made of number IDs that correspond to a density [g/cm3]
-    and atomic composition by weight, which must be stored for getting x-ray
-    attenuation coefficients later on.
-    '''
-    f = open(filename, 'r')
-    L_raw = [l.strip() for l in f.readlines() if len(l.strip())]
-    f.close()
-    
-    # split each line
-    mat_dict = {}
-    header = L_raw[0].split()
-    for line in L_raw[1:]:
-        
-        split = line.split()
-        N, density = int(split[0]), float(split[2])
-        
-        mat_dict[N] = [density, '']
-        for i,val in enumerate(split[3:]):
-            mat_dict[N][1] += f'{header[3+i]}({val})'
-
-    return mat_dict
-
-
 class Phantom:
     '''
     Class to handle a 3D voxelized phantom and corresponding params.
+    
+    phantom_id -- name for the phantom (used for saving outputs)
+    filename -- name of the binary file containing the phantom data. 
+                should be formatted as a raveled array of integers, 
+                each of which corresponds to a material with elemental
+                composition and density listed in the matcomp file
+    matcomp_filename -- file with the material compositions corresponding 
+                        to each integer of the phantom file. Should be 
+                        formatted with four tab-separated columns: ID, 
+                        material name, density, elemental composition by 
+                        weight (see example file)
+    Nx, Ny, Nz -- shape of the phantom in 3 dimensions (if 2D, set Nz=1)
+                  The x-y plane corresponds to each axial image.
+    ind -- z-index of the phantom slice to use if 3D (if 2D, leave ind=0)
+    sx, sy, sz -- size of each voxel in cm
+    dtype -- data type for raveled phantom file (default uint8)
     '''
-    def __init__(self, filename, phantom_id, matcomp, Nx, Ny, Nz, 
+    def __init__(self, phantom_id, filename, matcomp_filename, Nx, Ny, Nz, 
                  sx=0.1, sy=0.1, sz=0.1, ind=0, dtype=np.uint8):
-        self.filename = filename
+
         self.name = phantom_id
-        
+        self.filename = filename
+        self.matcomp_filename = matcomp_filename
+
         # number of voxels in each dimension
         self.Nx = Nx
         self.Ny = Ny
@@ -65,55 +57,37 @@ class Phantom:
         self.ind = ind
         self.M = self.M3D[ind]
         
-        self.matcomp_filename = matcomp
         
         # get the linear attenuation coefficients for the spectrum energies
         self.matcomp_dict = get_matcomp_dict(self.matcomp_filename)
         self.matkeys = np.array(list(self.matcomp_dict.keys()), dtype=dtype)
+
+
+
+def get_matcomp_dict(filename):
+    '''
+    Convert material composition file into a dictionary of density/matcomp strings.
+    '''
+    f = open(filename, 'r')
+    L_raw = [l.strip() for l in f.readlines() if len(l.strip())]
+    f.close()
+
+    # split each line
+    mat_dict = {}
+    header = L_raw[0].split()
+    for line in L_raw[1:]:
+        split = line.split()  # separate into four columns
         
-        # init other vars
-        self.u_dict = None
-        self.u_arr = None
-        self.M3D_seq = None
-        self.M_seq = None
-        
-        def get_u_dict(self, energies):
-            u_dict = {}
-            for mat in self.matcomp_dict:
-                density, matcomp = self.matcomp_dict[mat] #[1.0, 'H(11.2)O(88.8)'] ex: water
-                u_E = density * xc.mixatten(matcomp, energies)
-                u_E[np.isnan(u_E)] = 0.0
-                u_dict[mat] = u_E
-            self.u_dict = u_dict
-            return u_dict
-        
-        def get_u_arr(self, energies):
-            N = len(energies)            # num energies
-            M = len(self.matkeys)     # num materials
-            u_dict = get_u_dict(self, energies)
-            u_arr = np.zeros(N*M, dtype=np.float32)  # initialize array
-            for m in np.array(self.matkeys, dtype=int).sort():
-                u_arr[m*N: (m+1)*N] = u_dict[m]
-            self.u_arr = u_arr
-            return u_arr
-        
-    def M_mono(self, E0, HU=True):
-        matcomp_dict = get_matcomp_dict(self.matcomp_filename)
-        u_dict = {}
-        for mat in matcomp_dict:
-            density, matcomp = matcomp_dict[mat] 
-            u_E = density * float(xc.mixatten(matcomp, np.array([E0], dtype=np.float64)))
-            u_dict[mat] = u_E
-        M_mono = np.zeros(self.M.shape, dtype=np.float32)
-        for i in range(self.Nx):
-            for j in range(self.Ny):
-                M_mono[i,j] = u_dict[self.M[i,j]]
-        if HU:  # convert attenuation to HU 
-            u_w = float(xc.mixatten('H(11.2)O(88.8)', np.array([E0], dtype=np.float64)))
-            M_mono = 1000*(M_mono-u_w)/u_w
-        return M_mono
-        
-        
+        N    = int(split[0])
+        name = split[1]
+        density = float(split[2])
+        matcomp = split[3]        
+
+        mat_dict[N] = [density, matcomp]  # add dictionary entry
+
+    return mat_dict
+
+
 class ScannerGeometry:
     def __init__(self, SID=50.0, SDD=100.0, N_channels=360, gamma_fan=np.pi/4, N_proj=1000, theta_tot=2*np.pi, pxshape='rect'):
 
