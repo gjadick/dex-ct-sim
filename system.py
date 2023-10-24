@@ -6,9 +6,9 @@ Created on Tue Aug 2 13:31:59 2022
 @author: gjadick
 """
 import numpy as np
-import pandas as pd
+import cupy as cp
 from scipy.io import loadmat
-
+import pandas as pd 
 import xcompy as xc
 
 
@@ -55,45 +55,80 @@ class Phantom:
         
         # assign sample image
         self.ind = ind
-        self.M = self.M3D[ind]
-        
+        self.M = self.M3D[ind]        
         
         # get the linear attenuation coefficients for the spectrum energies
         self.matcomp_dict = get_matcomp_dict(self.matcomp_filename)
         self.matkeys = np.array(list(self.matcomp_dict.keys()), dtype=dtype)
 
+    def M_mono_stack(self, energies):
+        N_energies = len(energies)
+        M_mono_stack = cp.zeros([N_energies, self.Nx, self.Ny], dtype=cp.float32)        
+        for i_mat in self.matkeys:
+            density, matcomp = self.matcomp_dict[i_mat] 
+            u_E = density * cp.array(xc.mixatten(matcomp, energies), dtype=cp.float32)
+            for i_E in range(N_energies):
+                cp.place(M_mono_stack[i_E], self.M==i_mat, u_E[i_E])
+        return M_mono_stack        
+    
+    def M_mono(self, E0, HU=True):  # !!! might want to combine with M_mono_stack for speed
+        u_dict = {}
+        for mat in self.matcomp_dict:
+            density, matcomp = self.matcomp_dict[mat] 
+            u_E = density * float(xc.mixatten(matcomp, np.array([E0], dtype=np.float64)))
+            u_dict[mat] = u_E
+        M_mono = np.zeros(self.M.shape, dtype=np.float32)
+        for i in range(self.Nx):
+            for j in range(self.Ny):
+                M_mono[i,j] = u_dict[self.M[i,j]]
+        if HU:  # convert attenuation to HU 
+            u_w = float(xc.mixatten('H(11.2)O(88.8)', np.array([E0], dtype=np.float64)))
+            M_mono = 1000*(M_mono-u_w)/u_w
+        return M_mono
 
 
 def get_matcomp_dict(filename):
     '''
     Convert material composition file into a dictionary of density/matcomp strings.
     '''
-    f = open(filename, 'r')
-    L_raw = [l.strip() for l in f.readlines() if len(l.strip())]
-    f.close()
-
-    # split each line
+    with open(filename, 'r') as f:
+        L_raw = [l.strip() for l in f.readlines() if len(l.strip())]
     mat_dict = {}
     header = L_raw[0].split()
     for line in L_raw[1:]:
         split = line.split()  # separate into four columns
-        
         N    = int(split[0])
         name = split[1]
         density = float(split[2])
         matcomp = split[3]        
-
         mat_dict[N] = [density, matcomp]  # add dictionary entry
-
     return mat_dict
 
 
 class ScannerGeometry:
-    def __init__(self, SID=50.0, SDD=100.0, N_channels=360, gamma_fan=np.pi/4, N_proj=1000, theta_tot=2*np.pi, pxshape='rect'):
+    def __init__(self, eid=True, detector_file=None, pxshape='rect',
+                 SID=50.0, SDD=100.0, N_channels=360, gamma_fan=np.pi/4, 
+                 N_proj=1000, theta_tot=2*np.pi):
 
-        # name for this geometry        
-        self.geo_id = f'{int(SID)}cm_{int(SDD)}cm_{int(180*gamma_fan/np.pi)}fan_{N_proj}view_{N_channels}col'     
-
+        self.eid = eid  
+        if eid: 
+            self.det_mode = 'eid'  # energy integrating
+        else:
+            self.det_mode = 'pcd'  # photon counting
+            
+        if detector_file is None:  # ideal detector?
+            self.det_E = [1.0]
+            self.det_eta_E = [1.0]
+        else:
+            data = np.fromfile(detector_file, dtype=np.float32)
+            N_det_energy = len(data)//2
+            self.det_E = data[:N_det_energy]      # 1st half is energies
+            self.det_eta_E = data[N_det_energy:]  # 2nd half is detective efficiencies
+ 
+        # name the geometry        
+        #self.geo_id = f'{int(SID)}cm_{int(SDD)}cm_{int(180*gamma_fan/np.pi)}fan_{N_proj}view_{N_channels}col'     
+        self.geo_id = f'{int(SID)}cm_{int(SDD)}cm_{int(180*gamma_fan/np.pi)}fan_{N_proj}view_{N_channels}col_{self.det_mode}'
+        
         # source-isocenter and source-detector distances
         self.SID = SID
         self.SDD = SDD
@@ -102,10 +137,12 @@ class ScannerGeometry:
         self.N_channels = N_channels
         self.gamma_fan = gamma_fan
         self.dgamma_channel = gamma_fan/N_channels
-        if N_channels%2==1:        # odd
-            self.gammas = np.arange(-gamma_fan/2 + self.dgamma_channel/2, gamma_fan/2, self.dgamma_channel)    
-        else:
-            self.gammas = np.arange(-gamma_fan/2, gamma_fan/2, self.dgamma_channel)    
+        # !!! gammas !!!
+        #if N_channels%2==1: 
+        #    self.gammas = np.arange(-gamma_fan/2 + self.dgamma_channel/2, gamma_fan/2, self.dgamma_channel)    
+        #else:
+        #    self.gammas = np.arange(-gamma_fan/2, gamma_fan/2, self.dgamma_channel)    
+        self.gammas = np.arange(-gamma_fan/2, gamma_fan/2, self.dgamma_channel) + self.dgamma_channel/2
 
         # sampling distance, detector plane
         self.s = SDD*gamma_fan/N_channels
@@ -123,8 +160,6 @@ class ScannerGeometry:
         self.theta_tot = theta_tot
         self.dtheta_proj = theta_tot/N_proj
         self.thetas = np.arange(0, theta_tot, self.dtheta_proj )
-        
-
         
         # just a check
         if len(self.thetas) > N_proj:
@@ -216,4 +251,13 @@ class Spectrum:
 
 
 
+
+
+
+
+
+    
+    
+    
+    
     

@@ -7,155 +7,162 @@ Created on Tue Aug  2 13:30:56 2022
 """
 
 import numpy as np
-import time
-import xcompy as xc
-import os
+import cupy as cp
+from time import time
 
 
-def siddons(src, trg, N, dR, EPS=1e-8):
-    '''
-    An implementation of Siddons raytracing.
-    Assume 2D matrix, src & trg are outside of matrix.
-    The line from src -> trg should intersect the matrix.
+siddons_2D_raw = cp.RawKernel( 
+    name='siddons_2D_raw',
+    code='''
+    extern "C" __global__
     
-    Inputs:
-        src : 
-            [x1,y1], coordinates of the ray start point.
-        trg :
-            [x2,y2], coordinates of the ray end point.
-        N :
-            number of pixels in the matrix. (assume square)
-        dR :
-            size of pixels in the matrix. (assume isotropic)
-    '''
-    
-    # take x, y of src and trg
-    x1, y1 = src[0], src[1]
-    x2, y2 = trg[0], trg[1]
-    
-    # number of planes in x and y directions
-    Nx = N+1
-    Ny = N+1
-    
-    # distance traversed over the x and y directions
-    dx = x2 - x1 
-    dy = y2 - y1
-
-    #check for 0 distances
-    if np.abs(dx) < EPS:
-        dx = EPS
-    if np.abs(dy) < EPS:
-        dy = EPS
-
-    coord_plane_1 = -N*dR//2
-
-    def coord_plane(i):              # for i from 1 to N
-        return coord_plane_1 + (i-1)*dR
-
-    def aX(i):
-        return (coord_plane(i) - x1) / dx
-
-    def aY(i):
-        return (coord_plane(i) - y1) / dy
-
-    # parametric coords for intersections of ray with matrix
-    a_min = max(min(aX(1), aX(Nx)), min(aY(1), aY(Ny)))
-    a_max = min(max(aX(1), aX(Nx)), max(aY(1), aY(Ny)))
-
-    # start and end index for i,j
-    if dx >= 0:  # moving right
-        i_min = Nx - (coord_plane(Nx) - a_min*dx - x1)/dR
-        i_max = 1 + (x1 + a_max*dx - coord_plane_1)/dR
-    else:
-        i_min = Nx - (coord_plane(Nx) - a_max*dx - x1)/dR
-        i_max = 1 + (x1 + a_min*dx - coord_plane_1)/dR
-
-    if dy >= 0:  # moving up
-        j_min = Ny - (coord_plane(Ny) - a_min*dy - y1)/dR
-        j_max = 1 + (y1 + a_max*dy - coord_plane_1)/dR
-    else:
-        j_min = Ny - (coord_plane(Ny) - a_max*dy - y1)/dR
-        j_max = 1 + (y1 + a_min*dy - coord_plane_1)/dR
-
-    # round up/down for min/max, if not integer.
-    if np.abs(j_min - np.round(j_min)) > EPS:
-        j_min = np.ceil(j_min)
-    if np.abs(j_max - np.round(j_max)) > EPS:
-        j_max = np.floor(j_max)
-
-    if np.abs(i_min - np.round(i_min)) > EPS:
-        i_min = np.ceil(i_min)
-    if np.abs(i_max - np.round(i_max)) > EPS:
-        i_max = np.floor(i_max)
-
-    # cast as integers
-    i_min = np.round(i_min).astype(int)
-    i_max = np.round(i_max).astype(int)
-    j_min = np.round(j_min).astype(int)
-    j_max = np.round(j_max).astype(int)
-
-    i_vals = list(range(i_min, i_max+1, 1))
-    j_vals = list(range(j_min, j_max+1, 1))
-
-    # arrange a_x, a_y in ascending order
-    if dx >= 0: 
-        a_x = [aX(i) for i in i_vals]
-    else:
-        a_x = [aX(i) for i in i_vals[::-1]]
-
-    if dy >= 0: 
-        a_y = [aY(j) for j in j_vals]
-    else:
-        a_y = [aY(j) for j in j_vals[::-1]]
-
-    # merge a_x, a_y into sorted alphas
-    i = 0
-    j = 0
-    alphas = np.zeros(len(a_x) + len(a_y))
-    while i<len(a_x) or j<len(a_y):
-        if i<len(a_x) and j<len(a_y):
-            if a_x[i] < a_y[j]:
-                alphas[i+j] = a_x[i]
-                i+=1
-            else:
-                alphas[i+j] = a_y[j]
-                j+=1
-        elif i<len(a_x):
-            alphas[i+j] = a_x[i]
-            i+=1
-        elif j<len(a_y):
-            alphas[i+j] = a_y[j]
-            j+=1
-
-    # get the difference between alphas (normalized lengths)
-    dalphas = alphas[1:] - alphas[:-1]
-    dST = src - trg
-    d12 = np.linalg.norm(dST, axis=-1)
-    l = dalphas * d12
-
-    # get the voxel indices [i, j]
-    Nl = len(dalphas)
-    il = np.zeros(Nl, dtype=int)
-    jl = np.zeros(Nl, dtype=int)
-    m = 0
-    for m in range(0, Nl):
-        il[m] = (x1 + 0.5*(alphas[m]+alphas[m+1])*dx - coord_plane_1)/dR
-        jl[m] = (y1 + 0.5*(alphas[m]+alphas[m+1])*dy - coord_plane_1)/dR
-
+    void siddons_2D_raw(int N_rays, float *src_x, float *src_y, float *trg_x, float *trg_y, float *mu, int N, float dr, float *a_x, float *a_y, float *alphas,  float *line_integral) 
+    {
+     
+     int i = threadIdx.x + blockDim.x * blockIdx.x; //+ threadIdx.y + blockDim.y * blockIdx.y;
+     
+     if (i < N_rays) {
+        float EPS = 1.0E-4;   // set relatively large for rounding later
+        float x1 = src_x[i];  // source coordinates
+        float y1 = src_y[i];
+        float x2 = trg_x[i];  // target coordinates
+        float y2 = trg_y[i];
+        int Nx_pixels = N;    // assume square matrix
+        int Ny_pixels = N; 
+        int Nx = Nx_pixels + 1;  // number of planes in x and y directions
+        int Ny = Ny_pixels + 1;
+        int i0 = i*(N + 1);     // start index for pre-allocated a_x, a_y, alphas arrays
+        float dx = x2 - x1;     // total distance traversed in x and y
+        float dy = y2 - y1;
+        float d12 = hypotf(dx, dy); 
         
-    # do some post processing.
-    # 1. In case there are any l=0, remove those values 
-    # 2. Get rid of indices larger than N
-    l, il, jl = l[l>EPS], il[l>EPS], jl[l>EPS]
-    l, il, jl = l[il<N], il[il<N], jl[il<N]
-    l, il, jl = l[jl<N], il[jl<N], jl[jl<N]
+        // Check to avoid div by zero error (lines parallel with either x, y axis).
+        if ( fabsf(dx) < EPS) {dx = EPS;}
+        if ( fabsf(dy) < EPS) {dy = EPS;}
+        
+        // Other key values (see Siddon's paper). 
+        // The origin (0, 0) is defined in the center of the matrix.
+        // The planes at pixel edges are indexed from 1 to Nx = N_pixels + 1.
+        float coord_plane_1 = -N*dr / 2;  // assuming square for now
+        float coord_plane_Nx = coord_plane_1 + Nx_pixels*dr;  
+        float coord_plane_Ny = coord_plane_1 + Ny_pixels*dr;
+        float aX_1 = (coord_plane_1 - x1) / dx;    // a ~ alpha
+        float aX_Nx = (coord_plane_Nx - x1) / dx;
+        float aY_1 = (coord_plane_1 - y1) / dy;
+        float aY_Ny = (coord_plane_Ny - y1) / dy;
+        
+        // Parametric coords for intersections of ray with matrix.
+        // Sometimes weird results for small N?
+        float a_minf = fmaxf( fminf(aX_1, aX_Nx), fminf(aY_1, aY_Ny) );
+        float a_maxf = fminf( fmaxf(aX_1, aX_Nx), fmaxf(aY_1, aY_Ny) );
+        
+        // Compute phantom intersection start and end indices in x,y directions.
+        float i_minf, i_maxf, j_minf, j_maxf;
+        if (dx >= 0.0) {   // moving right
+            i_minf = Nx - (coord_plane_Nx - a_minf*dx - x1) / dr;
+            i_maxf = 1 + (x1 + a_maxf*dx - coord_plane_1) / dr;
+        }
+        else {
+            i_minf = Nx - (coord_plane_Nx - a_maxf*dx - x1) / dr;
+            i_maxf = 1 + (x1 + a_minf*dx - coord_plane_1) / dr;
+        }          
+        if (dy >= 0.0) {   // moving up
+            j_minf = Ny - (coord_plane_Ny - a_minf*dy - y1) / dr;
+            j_maxf = 1 + (y1 + a_maxf*dy - coord_plane_1) / dr;
+        }
+        else {
+            j_minf = Ny - (coord_plane_Ny - a_maxf*dy - y1) / dr;
+            j_maxf = 1 + (y1 + a_minf*dy - coord_plane_1) / dr;
+        }
+        
+        // Round up/down for min/max or if not round, cast as int.
+        // If EPS is too small, this will cause some error.
+        if ( fabsf(j_minf - nearbyintf(j_minf)) > EPS ) { j_minf = ceilf(j_minf); }
+        if ( fabsf(j_maxf - nearbyintf(j_maxf)) > EPS ) { j_maxf = floorf(j_maxf); }
+        if ( fabsf(i_minf - nearbyintf(i_minf)) > EPS ) { i_minf = ceilf(i_minf); }
+        if ( fabsf(i_maxf - nearbyintf(i_maxf)) > EPS ) { i_maxf = floorf(i_maxf); }
+        int i_min = lroundf(i_minf);
+        int i_max = lroundf(i_maxf);
+        int j_min = lroundf(j_minf);
+        int j_max = lroundf(j_maxf);
+        
+        // Get parametric distances a_x, a_y in ascending order.
+        int Na_x = i_max - i_min + 1;
+        int Na_y = j_max - j_min + 1; 
+        int Na = Na_x + Na_y;
+      
+        int ii, jj;  // i is reserved!
+        float coord_plane_i;  
+        for (ii = 0; ii < Na_x; ii++) {
+            coord_plane_i = coord_plane_1 + (i_min + ii - 1)*dr; 
+            if (dx >= 0) {  
+                a_x[i0 + ii] = (coord_plane_i - x1) / dx; }
+            else { 
+                a_x[i0 + i_max - i_min - ii] = (coord_plane_i - x1) / dx; }  // go in reverse
+        }
+        for (jj = 0; jj < Na_y; jj++) {
+            coord_plane_i = coord_plane_1 + (j_min + jj - 1)*dr;
+            if (dy >= 0) {
+                a_y[i0 + jj] = (coord_plane_i - y1) / dy; }
+            else { 
+                a_y[i0 + j_max - j_min - jj] = (coord_plane_i - y1) / dy; }  // go in reverse
+        }  
+        
+        // Merge a_x and a_y into one parametric alphas array
+        ii = 0;  // reset inds
+        jj = 0;
+        while (ii < Na_x || jj < Na_y) {
+            if ( (ii < Na_x) && (jj < Na_y) ) {
+                if (a_x[i0 + ii] < a_y[i0 + jj]) { 
+                       alphas[2*i0 + ii + jj] = a_x[i0 + ii]; ii++; }                 
+                else { alphas[2*i0 + ii + jj] = a_y[i0 + jj]; jj++; }  
+            }
+            else if (ii < Na_x) { alphas[2*i0 + ii + jj] = a_x[i0 + ii]; ii++; }  
+            else if (jj < Na_y) { alphas[2*i0 + ii + jj] = a_y[i0 + jj]; jj++; }  
+        }
     
-    return np.array([l, il, jl])
+        // Compute the final line integral.
+        float max_length = sqrtf(2)*dr + EPS;
+        float length;
+        int il, jl;
+        for (ii = 0; ii < Na-1; ii++) {  
+            length = d12 * (alphas[2*i0 + ii + 1] - alphas[2*i0 + ii]);
+            il = (x1 + 0.5*(alphas[2*i0 + ii + 1] + alphas[2*i0 + ii])*dx - coord_plane_1) / dr;
+            jl = (y1 + 0.5*(alphas[2*i0 + ii + 1] + alphas[2*i0 + ii])*dy - coord_plane_1) / dr;
+            if ((length>EPS && length<=max_length) && (il>=0 && il<N) && (jl>=0 && jl<N)) {  // check path is physical
+                line_integral[i] = line_integral[i] + mu[il + N*jl]*length; 
+            }
+        }
+    }}
+                             
+    '''
+)
+
+                             
+def siddons_2D(src_x, src_y, trg_x, trg_y, matrix, sz_matrix_pixel, N_threads_max=1024):
+
+    N_rays = src_x.size
+    N_matrix = matrix.shape[0]
+    # bits = (N_rays*5 + N_matrix**2 + 4*N_rays*(N_matrix+1)) * np.dtype(np.float32).itemsize
+    # print(f'{N_rays} rays, {N_matrix} matrix = {bits/1e9:.4f} GB')
+        
+    # Initialize empty arrays to store parametric intersections for each ray
+    a_x = cp.zeros(N_rays * (N_matrix+1), dtype=cp.float32)
+    a_y = cp.zeros(N_rays * (N_matrix+1), dtype=cp.float32)
+    alphas = cp.zeros(2*N_rays * (N_matrix+1), dtype=cp.float32)
+    line_integrals = cp.zeros(N_rays, dtype=cp.float32)
+    
+    # Assign block/grid sizes (1D) and run.    
+    siddons_2D_raw(block=(min(N_rays, N_threads_max), 1, 1), 
+                   grid=(1 + N_rays//N_threads_max, 1, 1),
+                   args=(N_rays, src_x, src_y, trg_x, trg_y, 
+                         matrix, N_matrix, cp.float32(sz_matrix_pixel),
+                         a_x, a_y, alphas, line_integrals))
+    
+    return line_integrals  # still on the device! 
 
 
-
-def detect_transmitted_sino(E, I0_E, sino_T_E, detector_file='input/detector/eta.bin',
-                            ideal=False, noise=True, eid=True):
+def detect_transmitted_sino(E, I0_E, sino_T_E, ct, noise=True):
     '''
     Function to calculate noisy detected signal in a single sinogram pixel.
 
@@ -167,14 +174,10 @@ def detect_transmitted_sino(E, I0_E, sino_T_E, detector_file='input/detector/eta
         List of number of photons in each corresponding energy bin.
     T_E : 1D np.array
         % of photons transmitted after the phantom, exp(-u*L), in each energy bin.
-    detector_file : str
-        path to numpy float32 file with the detective efficiency data [ E, eta(E) ]
-    ideal : bool, optional
-        Whether the detection function is ideal (eta=1) or not. The default is False.
+    ct : ScannerGeometry
+        class with needed information about the detector and its efficiency
     noise : bool, optional
         Whether to add Poisson noise. The default is True.
-    eid : bool, optional
-        Whether to energy-weight the sum over all detected photons. The default is True.
 
     Returns
     -------
@@ -182,121 +185,49 @@ def detect_transmitted_sino(E, I0_E, sino_T_E, detector_file='input/detector/eta
         Detected pixel value.
 
     '''
-    # transmitted spectrum: I0_E * T_E in each pixel
-    sino_transmitted = I0_E * sino_T_E   # shape: [N_proj, N_channels, N_energy]
-    N_proj = sino_T_E.shape[0]
-    N_cols = sino_T_E.shape[1]
-
-    # get efficiency
-    if ideal:
-        eta_E = 1.0
-    else:
-        data = np.fromfile(detector_file, dtype=np.float32)
-        N_det_energy = len(data)//2
-        det_E = data[:N_det_energy]      # 1st half is energies
-        det_eta_E = data[N_det_energy:]    # 2nd half is detective efficiencies
-        eta_E = np.interp(E, det_E, det_eta_E)  # interp file to target energies
-    
-    # get energy bin sizes
-    dE = np.append([E[0]], E[1:]-E[:-1]) # 1st energy bin is 0 to E[0]
-
-    sino = np.zeros([N_proj, N_cols], dtype=np.float32)
-    # add noise to each pixel
-    for i_proj in range(N_proj):
-        for i_gamma in range(N_cols):
-            
-            # number of photons counted in each energy bin
-            N_photons = sino_transmitted[i_proj, i_gamma] * eta_E * dE 
-            if noise: 
-                N_photons = np.random.poisson(N_photons)   
-            
-            # if EID, add energy-weighting to the Poisson RVs
-            if eid:
-                signal_E = E*N_photons
-            else:
-                signal_E = N_photons
-        
-            # sum over all energy bins
-            signal = np.sum(signal_E)    # bin width included! 
-            
-            sino[i_proj, i_gamma] = signal
-            
-    return sino
+    eta_E = cp.array(np.interp(E, ct.det_E, ct.det_eta_E), dtype=cp.float32)  # detector efficiency at target energies
+    dE = np.append([E[0]], E[1:]-E[:-1])  # energy bin widths, 1st is 0 to E[0]
+    signal_E = cp.array(I0_E * dE) * eta_E * sino_T_E  # signal in each energy bin
+    if noise:
+        signal_E = cp.random.poisson(signal_E, dtype=cp.int32)  # might need to increase to int64?
+    if ct.eid:
+        signal_E = cp.array(E) * signal_E            
+    return cp.sum(signal_E, axis=2) 
 
 
-def get_atten(u_dict, attens, lengths):
-    '''
-    For a single pixel, converts attens/lengths to attenuation 
-    in each energy bin
+def raytrace_fanbeam(ct, phantom, spec):
+    t0 = time()
 
-    Parameters
-    ----------
-    u_dict : dictionary
-        The dictionary of mu(E) arrays corresponding to each integer material ID.
-    attens : 1D array [int]
-        The array of integer material IDs of interest.
-    lengths : 1D array [float]
-        The array of corresponding path lengths for each material ID.
+    # Get coordinates for each source --> detector channel
+    d_thetas = cp.tile(cp.array(ct.thetas + cp.pi, dtype=cp.float32)[:, cp.newaxis], ct.N_channels).ravel()  # use newaxis for correct tiling
+    d_gammas = cp.tile(cp.array(ct.gammas, dtype=cp.float32), ct.N_proj)
+    src_x = ct.SID * cp.cos(d_thetas)
+    src_y = ct.SID * cp.sin(d_thetas)
+    trg_x = src_x - ct.SDD * cp.cos(d_thetas + d_gammas)
+    trg_y = src_y - ct.SDD * cp.sin(d_thetas + d_gammas)
 
-    Returns
-    -------
-    uL_E : 1D array [float]
-        The attenuation through the pixels as a funtion of energy.
-    '''
-    u_E = np.array([u_dict[mat_id] for mat_id in attens])
-    uL_E = u_E.T @ lengths
-    return np.exp(-uL_E)
-
-
-def raytrace_fanbeam(ct, phantom, spec, u_dict, use_cache=True, verbose=True):
-
-    # check whether a cached sino exists from previous run
-    # the transmission through the phantom in spec's energy bins for given ct geometry 
-    cache_dir  = f'./output/cache/{ct.geo_id}/{phantom.name}/{spec.name}/'
-    cache_file = cache_dir + 'sino.bin'
-    if use_cache and os.path.exists(cache_file):
-        print('using cached transmission sino,', cache_dir)
-        sino_T_E = np.fromfile(cache_file, dtype=np.float32).reshape([ ct.N_proj, ct.N_channels, len(spec.E)])
-        
-    # if not, raytrace
-    else:
-        print('raytracing, no cache file,', cache_dir)
-        os.makedirs(cache_dir, exist_ok=True)
-        sino_T_E = np.zeros([ ct.N_proj, ct.N_channels, len(spec.E)], dtype=np.float32)
-        
-        t0 = time.time()
-        
-        # rotate the source to each projection
-        for i_proj, theta0 in enumerate(ct.thetas+np.pi):
-            
-            if i_proj%20==0 and verbose:
-                print(i_proj, '/', ct.N_proj, f't={time.time() - t0:.2f}s')
-            
-            src =  ct.SID*np.array([np.cos(theta0), np.sin(theta0)])            
-            for i_gamma, gamma in enumerate(ct.gammas):
-                theta = theta0+gamma+ 1.5*ct.dgamma_channel # offset and center to match FBP
-                trg =   src - ct.SDD*np.array([np.cos(theta), np.sin(theta)])
-                
-                # raytrace src -> trg using siddons alg
-                lengths, xInd, yInd = siddons(src, trg, phantom.Nx, phantom.sx)
-                
-                ji_coords = np.array([yInd.astype(np.uint16), xInd.astype(np.uint16)]).T
-                ji = np.ravel_multi_index(ji_coords.reshape(ji_coords.size//2, 2).T, phantom.M.shape)
-                atten_ids = phantom.M.take(ji)
-                    
-                sino_T_E[i_proj, i_gamma] = get_atten(u_dict, atten_ids, lengths)
-        
-        # cache the calculated transmission sinogram
-        sino_T_E.tofile(cache_file) 
+    # For each monoenergy, raytrace for all the source, targets
+    matrix_stack = phantom.M_mono_stack(spec.E) 
+    sino_T_E = cp.zeros([ct.N_proj, ct.N_channels, len(spec.E)], dtype=np.float32)
+    for i_energy, energy in enumerate(spec.E): 
+        if i_energy%10==0:
+            print(f'{i_energy} / {len(spec.E)}, t={time() - t0:.2f}s')
+        uL_E = siddons_2D(src_x, src_y, trg_x, trg_y, matrix_stack[i_energy], phantom.sx)
+        uL_E = uL_E.reshape([ct.N_proj, ct.N_channels])
+        sino_T_E[:,:,i_energy] = cp.exp(-uL_E)
+    print(f'raytacing  done, t={time() - t0:.2f}s')
         
     # process the transmitted energy information into an actual signal
-    sino = detect_transmitted_sino(spec.E, spec.I0, sino_T_E)
+    sino = detect_transmitted_sino(spec.E, spec.I0, sino_T_E, ct).get()
+    print(f'forward project done, t={time() - t0:.2f}s')
     
     # fix div by 0?
     EPS = 1 #1e-8 
     sino[sino<EPS] = EPS
         
     return sino
+
+
 
 
 
