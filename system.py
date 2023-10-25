@@ -171,20 +171,12 @@ class ScannerGeometry:
 
     
 class Spectrum:
-    def __init__(self, filename, name, mono_E=False):
-        
-        # 1 uGy dose at 20cm water depth, rescale constants.
-        # These were computed with https://github.com/gjadick/dex-single-ray
-        rescale_1uGy_dict = {
-            '6MV':       271.5478714123602,
-            'detunedMV': 1.426161029392114,
-            '80kV':      781.7141362326054,
-            '120kV':     345.57004865705323,
-            '140kV':     267.0880507831676}
+    def __init__(self, filename, name, mono_E=None):
             
         # Effective mu_water and mu_air dictionaries for HU conversions,
         # found by simulating noiseless images of water phantom with each 
-        # spectrum and measuring the mu value in its center.
+        # spectrum and measuring the mu value in its center (150 projections, 
+        # 100 detector channels, 1 mGy dose).
         # These might be affected by beam hardening.
         u_water_dict = {
             '6MV':       0.04268331080675125  ,
@@ -198,55 +190,37 @@ class Spectrum:
             '80kV':      0.002364289714023471  ,
             '120kV':     0.0016269732732325792  ,
             '140kV':     0.0014648198848590255  }
-        E_eff_dict = {  # linear interp of u_water_dict with NIST curve
+        E_eff_dict = {  # linear interp of u_water_dict with NIST curve [keV]
             '6MV':       2692.36  ,
             'detunedMV': 1753.73  ,
             '80kV':      46.32  ,
             '120kV':     57.91, 
             '140kV':     63.79    }
         
-        # measured from 150 proj x 100 col, 1 mGy scan for HU conversion
-        self.u_water = u_water_dict[name]
-        self.u_air = u_air_dict[name]
-        self.E_eff = E_eff_dict[name]
-        
         self.filename = filename 
         self.name = name
-        
-        # attempt reading file
         try:  
-            if 'Accuray' in filename:
-                spec_data = pd.read_csv(filename, sep=',')
-                self.I0_raw = spec_data['Weight'].to_numpy()
-                self.E = spec_data['MeV'].to_numpy()*1000 # convert MeV -> keV
-            else:
-                spec_data = loadmat(filename)
-                self.I0_raw = spec_data['ss'][:,0]
-                self.E = spec_data['ee'][:,0]
+            data = np.fromfile(filename, dtype=np.float32)
+            self.E, self.I0 = data.reshape([2, data.size//2])
+            self.u_water = u_water_dict[name]
+            self.u_air = u_air_dict[name]
+            self.E_eff = E_eff_dict[name]
         except:
             print(f"Failed to open spectrum filename {filename}, failed to initialize.")
         
-        if mono_E:
-            print('Debugging! Monoenergetic on! 80kV')
-            self.E = np.array([80.0])
+        # For debugging, can use a monoenergetic x-ray beam.
+        if mono_E is not None:
+            print(f'Debugging! Monoenergetic on! {mono_E} keV')
+            self.E = np.array([mono_E])
             self.I0_raw = np.array([1.0e8]) # arbitrary counts
-            self.name = 'mono80keV'
-            
-        # scale counts to 1 mGy dose at 20 cm water depth
-        self.I0 = self.I0_raw * rescale_1uGy_dict[name] * 1e3 # uGy -> mGy
-        
-        # include energies rescaled to 1 keV bins
-        self.E_1keV = np.arange(1.0, np.max(self.E)+1, 1.0)
-        self.I0_1keV = np.interp(self.E_1keV, self.E, self.I0)
+            self.name = f'mono{mono_E:04}keV'
 
     def get_counts(self):
         return np.trapz(self.I0, x=self.E)
     
     def rescale_I0(self, scale, verbose=False):
-        if verbose:
-            print(f'rescaled, {self.get_counts():.2e} -> {scale*self.get_counts():.2e}')
+        print(f'rescaled counts : {self.get_counts():.2e} -> {scale*self.get_counts():.2e}')
         self.I0 = self.I0 * scale
-        self.I0_1keV = self.I0_1keV * scale
 
 
 
