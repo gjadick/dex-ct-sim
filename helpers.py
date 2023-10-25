@@ -187,7 +187,7 @@ def get_matdecomp(ct, phantom, spec1, spec2, D1, D2, N_matrix, FOV, ramp, n_iter
     sino_mask[sino1>=mask_thresh*np.max(sino1)] = 1
  
     # call Gauss-Newton material decomposition algorithm
-    Sino_aa = do_matdecomp_gn(sino1, sino2, spec1, spec2, n_iters)
+    Sino_aa = do_matdecomp_gn(sino1, sino2, spec1, spec2, phantom.name, ct, n_iters)
 
     # iterate over the two basis materials
     for i in range(2):
@@ -200,7 +200,7 @@ def get_matdecomp(ct, phantom, spec1, spec2, D1, D2, N_matrix, FOV, ramp, n_iter
         sino_mat.astype(np.float32).tofile(out_dir + f'mat{i+1}_sino.bin')
         
         # reconstruct and save basis material image
-        get_recon(out_dir, sino_mat, ct, N_matrix, FOV, ramp, use_gpu=GPU, HU=False, name=f'mat{i+1}_')
-        
+        get_recon(out_dir, sino_mat, ct, N_matrix, FOV, ramp, HU=False, name=f'mat{i+1}_')
+
     return Sino_aa
 
