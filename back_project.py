@@ -12,13 +12,27 @@ from time import time
     
 
 def pre_process(sino_log, ct, ramp_percent):
-    """ 
-    pre-process the projections for recon
-    applies fan-beam filter and sinc window for noise suppression
     """
-    
-    gammas = ct.gammas - ct.dgamma_channel/2  # why need to subtract ???
-    if ct.N_proj%2==1:   # this is buggy :-( 
+    Pre-process the raw projections for FFBP.
+    Applies fan-beam filter and sinc window for noise suppression.
+
+    Parameters
+    ----------
+    sino_log : 2D cupy array
+        The log'd raw sinogram data, ln(-I/I0).
+    ct : ScannerGeometry
+        The geometry used for the raw data acquisition.
+    ramp_percent : float
+        Percent cutoff of the Nyquist frequency for sinc windowing.
+
+    Returns
+    -------
+    sino_filtered : 2D cupy array
+        The pre-processed sinogram (same shape as input sino_log).
+    """
+
+    gammas = ct.gammas - ct.dgamma_channel/2  
+    if ct.N_proj%2==1:   # may cause issues with odd num projections !!!
         n = cp.arange(-ct.N_channels//2+1, ct.N_channels, 1, dtype=cp.float32)
     else:
         n = cp.arange(-ct.N_channels//2, ct.N_channels, 1, dtype=cp.float32)
@@ -57,9 +71,26 @@ def pre_process(sino_log, ct, ramp_percent):
         
 
 def get_recon_coords(N_matrix, FOV):
-    """Get the coordinates needed for the reconstruction matrix (common to all recons with same matrix)"""
-    ## matrix coordinates: (r, theta)
-    sz = FOV/N_matrix 
+    """
+    Compute the polar coordinates corresponding to each pixel in the final 
+    reconstruction matrix (common to all recons with same matrix dimensions.)
+
+    Parameters
+    ----------
+    N_matrix : int
+        Number of pixels in the recon matrix so that its shape = [N_matrix, N_matrix].
+    FOV : float
+        Field of view of the recon matrix [cm].
+
+    Returns
+    -------
+    r_matrix : 2D cupy array ~ [N_matrix, N_matrix]
+        Radial coordinate [cm] of each pixel.
+    theta_matrix : 2D cupy array ~ [N_matrix, N_matrix]
+        Angle coordinate [radians] of each pixel.
+
+    """
+    sz = FOV/N_matrix  # pixel size
     matrix_coord_1d = cp.arange((1-N_matrix)*sz/2, N_matrix*sz/2, sz, dtype=cp.float32)
     X_matrix, Y_matrix = cp.meshgrid(matrix_coord_1d, -matrix_coord_1d)
     r_matrix = cp.sqrt(X_matrix**2 + Y_matrix**2)
@@ -68,6 +99,31 @@ def get_recon_coords(N_matrix, FOV):
 
 
 def do_recon(sino, r_matrix, theta_matrix, SID, dgamma, dbeta):
+    """
+    Reconstruct a log'd sinogram using fan-beam filtered back-projection.
+
+    Parameters
+    ----------
+    sino_log : 2D cupy array ~ [N_proj, N_col]
+        The log'd sinogram data, ln(-I/I0). Should already be pre-processed.
+        Shape is the number of projection views (N_proj) by number of detector
+        channels (N_col).
+    r_matrix : 2D cupy array ~ [N_matrix, N_matrix]
+        Radial coordinate [cm] of each pixel.
+    theta_matrix : 2D cupy array ~ [N_matrix, N_matrix]
+        Angle coordinate [radians] of each pixel.
+    SID : float
+        Source-to-isocenter distance [cm].
+    dgamma : float
+        Angular decrement [radians] between adjacent detector channels.
+    dbeta : TYPE
+        Angular decrement [radians] between projection views.
+
+    Returns
+    -------
+    matrix : 2D numpy array ~ [N_matrix, N_matrix]
+        The reconstructed CT image.
+    """
 
     N_proj, N_cols = sino.shape
     N_matrix, _ = r_matrix.shape
@@ -80,7 +136,7 @@ def do_recon(sino, r_matrix, theta_matrix, SID, dgamma, dbeta):
         if i_proj%100 == 0:            
             print(f'{i_proj} / {N_proj}, t={time() - t0:.2f}s')
 
-        beta = i_proj*dbeta          
+        beta = i_proj*dbeta  # angle to x-ray source for each projection      
         gamma_targets = cp.arctan(r_matrix*cp.cos(beta - theta_matrix) / (r_matrix*cp.sin(beta - theta_matrix) + SID))
         L2_M = r_matrix**2 * cp.cos(beta - theta_matrix)**2 + (SID + r_matrix*cp.sin(beta - theta_matrix))**2
         
