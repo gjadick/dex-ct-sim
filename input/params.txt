@@ -1,0 +1,37 @@
+{
+    "RUN_ID": "mvkv_pelvis",
+    "forward_project": true,
+    "back_project": true,
+        
+    "phantom_type": "voxel",
+    "phantom_id": "xcat_pelvis",
+    "phantom_filename": "./input/phantom/mvkv/xcat_pelvis_uint8_512_512_1_1mm.bin",
+    "matcomp_filename": "./input/phantom/mvkv/xcat_materials.csv",
+    "Nx": 512,
+    "Ny": 512,
+    "Nz": 1,
+    "dx": 0.1,
+    "dy": 0.1,
+    "dz": 0.1,
+    "z_index": 0,
+    
+    "scanner_geometry": "fan_beam",
+    "SID": 60.0,
+    "SDD": 100.0,
+    "N_channels": 800,
+    "N_projections": 1200,
+    "fan_angle_total": 0.8230337,
+    "rotation_angle_total": 6.283185,
+    "detector_px_height": 1.0,
+    "detector_mode": "eid",
+    "detector_filename": "./input/detector/eta_eid_mv.bin", 
+
+    "spectrum_id": "NA",
+    "spectrum_filename": "NA",
+    "N_photons_per_cm2_per_scan": "NA",
+
+    "N_recon_matrix": 512,
+    "FOV_recon": 50.0,
+    "ramp_filter_percent_Nyquist": 0.8
+
+}
