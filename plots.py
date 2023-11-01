@@ -9,17 +9,19 @@ Created on Mon Apr 24 07:50:57 2023
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy.interpolate import RegularGridInterpolator
+import os
 
-from system import ScannerGeometry, Phantom, Spectrum
+import sys
+sys.path.append('xtomosim')  
+import xtomosim.xcompy as xc
+from xtomosim.system import FanBeamGeometry, VoxelPhantom
 from matdecomp import mat1, mat2, matcomp1, matcomp2
-import xcompy as xc
 
-
-#%%
 
 # some plotting params
-figdir = 'output/figs/'
+figdir = 'output/figs/mvkv_r1/'
 savefig = True
+os.makedirs(figdir, exist_ok=True)
 
 plt.rcParams.update({
     # figure
@@ -93,7 +95,6 @@ def label_panels(ax, c='k', loc='outside', dx=-0.06, dy=0.09, fontsize=None,
         ymin, ymax = axi.get_ylim()
         xloc = xmin + (xmax-xmin)*xp
         yloc = ymin + (ymax-ymin)*yp
-        
         label = labels[i]
         axi.text(xloc, yloc, bf(label), color=c, fontsize=fontsize,
           va='center', ha='center')
@@ -105,8 +106,9 @@ def label_panels(ax, c='k', loc='outside', dx=-0.06, dy=0.09, fontsize=None,
 #%% stuff for plotting 
 
 # acquisition geometry
-ct = ScannerGeometry(N_channels=800, N_proj=1200, gamma_fan=0.8230337,  
-                  SID=60.0, SDD=100.0, pxshape='rect')  
+ct = FanBeamGeometry(N_channels=800, N_proj=1200, gamma_fan=0.8230337,  
+                  SID=60.0, SDD=100.0, h_iso=1.0, 
+                  eid=True, detector_file='./input/detector/eta_eid_mv.bin')  
 
 # some recon params
 N_matrix = 512
@@ -115,41 +117,20 @@ FOV = 50.0
 ramp = 0.8
 
 # phantoms
-phantom_dict = {}
-for phantom in ['pelvis','pelvis_metal']:
-    filename_phantom = f'input/phantom/xcat_{phantom}_uint8_512_512_1_1mm.bin'
-    filename_matcomp = 'input/phantom/xcat_elemental_comps.txt'
-    xcat = Phantom(filename_phantom, phantom, filename_matcomp, 512, 512, 1, ind=0) 
-    phantom_dict[phantom] = xcat
+proot = 'input/phantom/mvkv/xcat_'
+def pname(txt):
+    return proot + txt + '_uint8_512_512_1_1mm.bin'
+phantom_dict = {
+    'pelvis' : VoxelPhantom('pelvis', pname('pelvis'), proot+'materials.csv', 512, 512, 1, z_index=0), 
+    'pelvis_steel' : VoxelPhantom('pelvis_steel', pname('pelvis_metal'), proot+'materials.csv', 512, 512, 1, z_index=0),
+    'pelvis_titanium' : VoxelPhantom('pelvis_titanium', pname('pelvis_metal'), proot+'materials_titanium.csv', 512, 512, 1, z_index=0) 
+    }
+phantoms = phantom_dict.keys()
 
-# spectra 
-filepath_spectrum = 'input/spectrum/'
-filename_dict = {
-    '6MV':       "Accuray_treatment6MV.csv", 
-    'detunedMV': "Accuray_detuned.csv", 
-    '80kV':      "spec80.mat", 
-    '120kV':     "spec120.mat", 
-    '140kV':     "spec140.mat"     }
-spec_dict = {}
-for spec_id in filename_dict:
-    spec = Spectrum(filepath_spectrum+filename_dict[spec_id], spec_id)
-    spec_dict[spec_id] = spec
-    
-    
 # pairs to iterate over for plotting
 # spec_id1,  spec_id2, dose1, dose2
 spec_pairs = [ ['140kV',    '80kV',   5,     5],
                ['detunedMV','80kV',   9,     1] ]
-
-
-# coords of ROIs for SNR measurements, dx, dy, x0, y0, x02, y02
-# x0, y0 gives signal and x02, y02 gives background
-# these were manually selected
-roi_dict = { 'lung'  :   [5,  5,  291, 271, 291, 280],
-             'pelvis':   [20, 20, 246, 242, 278, 284],
-             'prost' :   [15, 15, 248, 271, 274, 280] }
-roi_dict['pelvis_metal'] = roi_dict['pelvis']
-roi_dict['lung_metal'] = roi_dict['lung']
 
 
 def make_vmi(E0, M1, M2, 
@@ -165,7 +146,7 @@ def make_vmi(E0, M1, M2,
 def measure_roi(M, roi_info, give_roi=False, ax=None):
     x0, y0, dx, dy = roi_info
     mask = np.zeros(M.shape, dtype=bool)
-    mask[y0:y0+dy, x0:x0+dy] = 1
+    mask[y0:y0+dy, x0:x0+dx] = 1
     ROI = M[mask]
     u, v = np.mean(ROI), np.var(ROI)
     if ax is not None:
@@ -174,7 +155,7 @@ def measure_roi(M, roi_info, give_roi=False, ax=None):
         ax.plot(xvals, yvals, 'r-', lw=0.5)
     if give_roi:
         return ROI
-    return u,v
+    return u, v
 
 def make_cbar(axi, m, label, 
               cbar_fsz=8, cbar_pad=0.01, cbar_lab_pad=-5):
@@ -187,27 +168,27 @@ def crop_img(M, crop):
     M_cropped = M[r0-crop//2:r0+crop//2, r0-crop//2:r0+crop//2]
     return M_cropped
 
-def get_img_ct(ct, phantom_id, spec_id, dose, crop=None,
+def get_img_ct(phantom_id, spec_id, dose, crop=None, units='HU',
                N_matrix=N_matrix, FOV=FOV, ramp=ramp):
-    img_dir = f'output/{ct.geo_id}/{phantom_id}/{spec_id}/{int(dose*1000):04}uGy/'     
-    fname = f'recon_{N_matrix}_{int(FOV):02}cm_{int(ramp*100):03}ramp.bin' 
+    assert units=='HU' or units=='raw'
+    img_dir = f'output/mvkv_{phantom_id}/{spec_id}_{int(dose*1000):04}uGy/'     
+    fname = f'recon_{units}_float32.bin' 
     M = np.fromfile(img_dir+fname, dtype=np.float32).reshape([N_matrix, N_matrix])
     if crop is not None:
         M = crop_img(M, crop)
     return M
 
-def get_img_basismats(ct, phantom_id, spec_id1, spec_id2, dose1, dose2, crop=None,
+def get_img_basismats(phantom_id, spec_id1, spec_id2, dose1, dose2, crop=None,
                       N_matrix=N_matrix, FOV=FOV, ramp=ramp):
-    img_dir = f'output/{ct.geo_id}/{phantom_id}/matdecomp_{spec_id1}_{spec_id2}/{int(dose1*1000):04}uGy_{int(dose2*1000):04}uGy/'     
-    base_fname = f'recon_{N_matrix}_{int(FOV):02}cm_{int(ramp*100):03}ramp.bin' 
-    M1 = np.fromfile(img_dir+'mat1_'+base_fname, dtype=np.float32).reshape([N_matrix, N_matrix])
-    M2 = np.fromfile(img_dir+'mat2_'+base_fname, dtype=np.float32).reshape([N_matrix, N_matrix])
+    img_dir = f'output/mvkv_{phantom_id}/matdecomp_{spec_id1}_{spec_id2}_{int(dose1*1000):04}uGy_{int(dose2*1000):04}uGy/'     
+    M1 = np.fromfile(img_dir+'mat1_recon_float32.bin', dtype=np.float32).reshape([N_matrix, N_matrix])
+    M2 = np.fromfile(img_dir+'mat2_recon_float32.bin', dtype=np.float32).reshape([N_matrix, N_matrix])
     if crop is not None:
         M1 = crop_img(M1, crop)
         M2 = crop_img(M2, crop)
     return M1, M2
 
-def register_xcat(M0, N0=512, Nf=524, dx=10, dy=10):
+def register_xcat(M0, N0=512, Nf=524, dx=6, dy=6):
     '''
     Register original XCAT to the reconstructed images.
     Scale parameters (N0, Nf) chosen by known pixel sz difference,
@@ -232,22 +213,27 @@ def get_xcat_mask(M, threshold=-900):
     return mask
 
 
-
 #%% Location of ROIs for different measurements
 
+# coords of ROIs for SNR measurements, dx, dy, x0, y0, x02, y02
+# x0, y0 gives signal and x02, y02 gives background
+# these were manually selected
+dx, dy, x0, y0 = 25, 25, 248, 246  
+dx2, dy2, x02, y02 = 20, 20, 282, 286
+ 
 WL, WW = 100, 500
 hu_kwargs = {'cmap':'gray', 'vmin':WL-WW/2, 'vmax':WL+WW/2}
 
 fig, ax = plt.subplots(1,2, dpi=300, figsize=[6.5,2] )
 
-for i, phantom in enumerate(['pelvis', 'pelvis_metal']):
+for i, phantom in enumerate(['pelvis', 'pelvis_steel']):
     
     # plot xcat
     xcat = phantom_dict[phantom]
-    M = register_xcat(xcat.M_mono(80))
+    M = register_xcat(xcat.M_mono(80).get())
     ax[i].imshow(M, **hu_kwargs)
     ax[i].axis('off')
-    ax[i].set_title(phantom.replace('_metal', ' with metal'))
+    ax[i].set_title(phantom.replace('_SS', ' with metal'))
 
     # crop the image and add text with W/L params
     Y0 = 140  
@@ -255,9 +241,8 @@ for i, phantom in enumerate(['pelvis', 'pelvis_metal']):
     ax[i].text(5,Y0+5,f'W/L = {WW}/{WL}',color='w', ha='left', va='top')
     
     # show ROIs
-    dx, dy, x0, y0, x02, y02 = roi_dict[phantom]
     _, _ = measure_roi(M, [x0,  y0, dx, dy], ax=ax[i])   # signal
-    _, _ = measure_roi(M, [x02, y02, dx, dy], ax=ax[i])  # background
+    _, _ = measure_roi(M, [x02, y02, dx2, dy2], ax=ax[i])  # background
 
 ax[1].arrow(110, 212, 38, 25, facecolor='yellow', edgecolor='k',
             width=15, head_width=35, head_length=20)
@@ -272,31 +257,31 @@ plt.show()
 
 #%% RMSE measurements for pelvis w/w/o metal
 
-fig, ax = plt.subplots(1,2, dpi=300, figsize=[7, 3])
+
+fig, ax = plt.subplots(1,3, dpi=300, figsize=[8, 2.5])
 phantnames = f'_{int(100*ramp)}ramp'
 legend_elements = []
 
 for i, [phantom, Evals] in enumerate([
-             ['pelvis',       np.arange(50, 155, 10)],  # 10
-             ['pelvis_metal', np.arange(100, 305, 20)]]):  # 20
-    ax[i].set_title(phantom.replace('_metal', ' with metal'))
-    phantnames += f'_{phantom}'
+              ['pelvis',       np.arange(40, 140, 10)], 
+              ['pelvis_titanium',  np.arange(100, 320, 24)], 
+              ['pelvis_steel',  np.arange(100, 320, 24)],  
+             ]):  # 20
+    ax[i].set_title(phantom.replace('_', ' with '))
     
     xcat = phantom_dict[phantom]
-    mask = get_xcat_mask(register_xcat(xcat.M_mono(120)))  # mask of non-air values
-    dx, dy, x0, y0, x02, y02 = roi_dict[phantom]
+    mask = get_xcat_mask(register_xcat(xcat.M_mono(120).get()))  # mask of non-air values
 
     for spec1, spec2, D1, D2, ls, sid in [
             ['detunedMV', '80kV', 9, 1, 'ro', 'MV-80kV'],
             ['140kV',     '80kV', 5, 5, 'bs', '140-80kV']]:
-        
-        M_m1, M_m2 = get_img_basismats(ct, phantom, spec1, spec2, D1, D2)#, crop=N_crop)
+        M_m1, M_m2 = get_img_basismats(phantom, spec1, spec2, D1, D2)#, crop=N_crop)
         
         rmses = []
         Evals_all = np.arange(Evals[0], Evals[-1]+1, 1)  # get smooth curve
         for E0 in Evals_all:
             vmi = make_vmi(E0, M_m1, M_m2)[mask]
-            vmi_gt = register_xcat(xcat.M_mono(E0))[mask]
+            vmi_gt = register_xcat(xcat.M_mono(E0).get())[mask]
             rmse = np.sqrt( np.mean( (vmi-vmi_gt)**2 ) )
             rmses.append(rmse)
             
@@ -312,9 +297,9 @@ for i, [phantom, Evals] in enumerate([
 ax[0].set_ylabel('RMSE [HU]')
 for axi in ax:
     axi.set_xlabel('VMI energy [keV]')
-    x0,x1 = axi.get_xlim()
-    y0,y1 = axi.get_ylim()
-    axi.set_aspect(0.9*(x1-x0)/(y1-y0))
+    lx0, lx1 = axi.get_xlim()
+    ly0, ly1 = axi.get_ylim()
+    axi.set_aspect(0.9*(lx1-lx0)/(ly1-ly0))
     
 fig.tight_layout(pad=1.1)
 fig.legend(handles=legend_elements, loc='center right')
@@ -325,35 +310,37 @@ if savefig:
     plt.savefig(figdir+f'rmse{phantnames}.pdf')
 plt.show()
     
-        
-#%% SNR measurements for pelvis w/w/o metal
 
-fig, ax = plt.subplots(1,2, dpi=300, figsize=[7, 3])
+
+#%% CNR measurements for pelvis w/w/o metal
+
+fig, ax = plt.subplots(1,3, dpi=300, figsize=[8.5, 2.8])
 ax[0].set_ylabel('SNR')
+
 
 phantnames = f'_{int(100*ramp)}ramp'
 legend_elements = []
 
+#
 for i, [phantom, Evals] in enumerate([
-             ['pelvis',       np.arange(50, 175, 10)],  
-             ['pelvis_metal', np.arange(100, 345, 20)]]):  
-    ax[i].set_title(phantom.replace('_metal', ' with metal'))
-    phantnames += f'_{phantom}'
+              ['pelvis',       np.arange(40, 140, 10)], 
+              ['pelvis_titanium',  np.arange(100, 320, 24)], 
+              ['pelvis_steel',  np.arange(100, 320, 24)],  
+            ]):
+    ax[i].set_title(phantom.replace('_', ' with '))
     
     xcat = phantom_dict[phantom]
-    dx, dy, x0, y0, x02, y02 = roi_dict[phantom]
 
     # single specs
     tlw, col = 1.5, 'k'
     for spec, D, ls in  [['80kV', 10, '--'], 
                         ['120kV', 10, ':' ], 
                         ['140kV', 10, '-' ]]:
-        
-        M = get_img_ct(ct, phantom, spec, D)
+
+        M = get_img_ct(phantom, spec, D)
         u1, v1 = measure_roi(M, [x0, y0, dx, dy])#, ax=ax[i])   # signal
         u2, v2 = measure_roi(M, [x02, y02, dx, dy])#, ax=ax[i]) # background
         snr = (u1-u2)/np.sqrt(v1 + v2)
-        
         print(phantom, spec, f'SNR = {snr:.3f}')
         ax[i].axhline(snr, lw=tlw, color=col, ls=ls, label=spec)
         if i==0:
@@ -364,7 +351,7 @@ for i, [phantom, Evals] in enumerate([
             ['140kV',     '80kV', 5, 5,  'bs', '140-80kV'],
             ['detunedMV', '80kV', 9, 1,  'ro', 'MV-80kV']]:
         
-        M_m1, M_m2 = get_img_basismats(ct, phantom, spec1, spec2, D1, D2)
+        M_m1, M_m2 = get_img_basismats(phantom, spec1, spec2, D1, D2)
         
         Evals_all = np.arange(Evals[0], Evals[-1]+1, 1)  # get smooth curve
         snrs = []
@@ -386,9 +373,9 @@ for i, [phantom, Evals] in enumerate([
 
 for axi in ax:
     axi.set_xlabel('VMI energy [keV]')
-    x0,x1 = axi.get_xlim()
-    y0,y1 = axi.get_ylim()
-    axi.set_aspect(0.9*(x1-x0)/(y1-y0))
+    tx0, tx1 = axi.get_xlim()
+    ty0, ty1 = axi.get_ylim()
+    axi.set_aspect(0.9*(tx1-tx0)/(ty1-ty0))
 
 fig.tight_layout(pad=1.1)
 fig.legend(handles=legend_elements, loc='center right')
@@ -408,7 +395,8 @@ E0s = [80, 300]
 
 for phantom, WL, WW, N_crop in [
             ['pelvis', 50, 500, 380],
-            ['pelvis_metal', 50, 500 , 380 ],
+            ['pelvis_titanium', 50, 500 , 380 ],
+            ['pelvis_steel', 50, 500 , 380 ],
             ]:
     hu_kwargs = {'cmap':'gray', 'vmin':WL-WW/2, 'vmax':WL+WW/2}
     mat1_kwargs = {'cmap':'gray', 'vmin':0, 'vmax':1.2}  # turbo
@@ -418,9 +406,9 @@ for phantom, WL, WW, N_crop in [
         
         fig, ax = plt.subplots(3,2, dpi=300, figsize=[6.3,8])
 
-        M_s1 = get_img_ct(ct, phantom, spec1, D1, crop=N_crop)
-        M_s2 = get_img_ct(ct, phantom, spec2, D2, crop=N_crop)
-        M_m1, M_m2 = get_img_basismats(ct, phantom, spec1, spec2, D1, D2, crop=N_crop)
+        M_s1 = get_img_ct(phantom, spec1, D1, crop=N_crop)
+        M_s2 = get_img_ct(phantom, spec2, D2, crop=N_crop)
+        M_m1, M_m2 = get_img_basismats(phantom, spec1, spec2, D1, D2, crop=N_crop)
         vmi1 = make_vmi(E0s[0], M_m1, M_m2)
         vmi2 = make_vmi(E0s[1], M_m1, M_m2)
         
@@ -462,6 +450,58 @@ for phantom, WL, WW, N_crop in [
             plt.savefig(figdir+fname)
         plt.show()
 
+
+
+#%% Revision 1 : metal attenuation
+
+data_SS = [['Steel 316L', 8.0, 'C(0.5)N(0.1)P(0.0025)S(0.01)Fe(64.335)Cr(17.0)Ni(13.0)Mo(2.25)Mn(2.0)Si(0.75)Cu(0.5)']]
+
+# 2) Ti and alloys
+data_Ti = [['Pure Ti', 4.5, 'Ti(100.0)'],
+           ['Ti-6Al-4V', 4.43, 'Al(6)Ti(90)V(4)'],
+           ['Ti-5Al-2.5Fe', 4.49, 'Ti(92.5)Al(5)Fe(2.5)'],
+           ['Ti-6Al-7Nb ', 4.49, 'Ti(87)Al(6)Nb(7)']]
+
+# 3) Co alloys
+data_CoCr = [['Co-28Cr-6Mo', 8.5, 'Co(66)Cr(28)Mo(6)'],  # F75 (-98)   -- same comp as F799-99
+             ['Co-35Ni-20Cr-10Mo', 8.5,'Co(35)Ni(35)Cr(20)Mo(10)'],  # F562 (-95)
+             ['Co-20Cr-15W-10Ni', 8.5, 'Co(55)Cr(20)W(15)Ni(10)']]  # F90 (-97)
+
+lines = ['-', '--', ':', '-.', '-']
+datas = [data_CoCr, data_Ti, data_SS]
+subcols = [
+           ['firebrick','tomato','darkorange'], 
+           ['darkblue', 'blue', 'cornflowerblue','steelblue','lightsteelblue'], 
+           ['k', 'gray', 'silver'],]
+
+fig, ax = plt.subplots(1,2,figsize=[5.3,2.6])
+for axi, energy_units, E in zip(ax, ['keV','MeV'], [np.linspace(1, 140, 2000), np.linspace(150, 6500, 2000)]):
+    for j, data in enumerate(datas):
+        for i, x in enumerate(data):
+            ls = lines[i]
+            col = subcols[j][i]
+            name, density, matcomp = x
+            mu = xc.mixatten(matcomp, E)*density
+            if energy_units=='keV':
+                axi.plot(E, mu, ls=ls, lw=1., color=col, label=name)
+            elif energy_units=='MeV':
+                axi.plot(E*1e-3, mu, ls=ls, lw=1., color=col)#, label=name)
+    axi.set_title(f'{energy_units}-scale')
+    axi.set_yscale('log')
+    axi.set_xlabel(f'energy [{energy_units}]')
+    #axi.legend()
+ax[0].set_ylabel('linear attenuation coefficient [cm$^{-1}$]')
+fig.tight_layout(pad=0.5)
+fig.legend(framealpha=1, fontsize=8, bbox_to_anchor=(1.04,0.9))#loc='center right')#title='energy, b')
+
+# manual panel labeling because of y-axis logscale
+#label_panels(ax, dy=0.25)
+ax[0].text(3.224, 3e5, bf('(a)'), va='center', ha='center')
+ax[1].text(.2516, 5.1, bf('(b)'), va='center', ha='center')
+
+if savefig:
+    plt.savefig(figdir+'metal_LACs.pdf', bbox_inches='tight')
+plt.show()
 
 
 
