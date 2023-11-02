@@ -257,7 +257,6 @@ plt.show()
 
 #%% RMSE measurements for pelvis w/w/o metal
 
-
 fig, ax = plt.subplots(1,3, dpi=300, figsize=[8, 2.5])
 phantnames = f'_{int(100*ramp)}ramp'
 legend_elements = []
@@ -315,13 +314,11 @@ plt.show()
 #%% CNR measurements for pelvis w/w/o metal
 
 fig, ax = plt.subplots(1,3, dpi=300, figsize=[8.5, 2.8])
-ax[0].set_ylabel('SNR')
-
+ax[0].set_ylabel('CNR')
 
 phantnames = f'_{int(100*ramp)}ramp'
 legend_elements = []
 
-#
 for i, [phantom, Evals] in enumerate([
               ['pelvis',       np.arange(40, 140, 10)], 
               ['pelvis_titanium',  np.arange(100, 320, 24)], 
@@ -386,7 +383,6 @@ if savefig:
     plt.savefig(figdir+f'snr{phantnames}.pdf')
 plt.show()
 
-    
 
 
 #%% All images per DE-CT acquisition (SE-CTs, BMIs, VMIs)
