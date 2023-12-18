@@ -717,3 +717,35 @@ if savefig:
 plt.show()
 
 
+
+
+#%% Single-kV images for the three phantoms
+
+N_crop = 380
+wmin = -200
+wmax = 300
+bhc_type = 'bone'
+
+Nmin, Nmax = int(N_matrix - N_crop)//2, int(N_matrix + N_crop)//2
+fig, ax = plt.subplots(3,3, dpi=300, figsize=[6,6])
+for i, phantom in enumerate(['pelvis', 'pelvis_titanium', 'pelvis_steel']):
+    ax[0,i].set_title(phantom.replace('_', ' with '))
+    for j, spec in enumerate(['140kV', '120kV', '80kV']):
+        ax[j,0].set_ylabel(spec)
+        ax[j,i].set_xticks([])
+        ax[j,i].set_yticks([])
+        M = get_img_ct_BHC(phantom, spec, D, bhc=bhc_type)
+        M = M[Nmin:Nmax, Nmin:Nmax]
+        ax[j,i].imshow(M, vmin=wmin, vmax=wmax, cmap='gray')
+label_panels(ax, c='w', loc='inside', dx=0.07, dy=0.06)
+fig.tight_layout(pad=0.2)
+if savefig:
+    plt.savefig(figdir+'imgs_sect_bhc.pdf', bbox_inches='tight')
+plt.show()
+        
+        
+        
+        
+        
+        
+        
