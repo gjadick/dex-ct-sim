@@ -19,7 +19,7 @@ from matdecomp import mat1, mat2, matcomp1, matcomp2
 
 
 # some plotting params
-figdir = 'output/figs/mvkv_r1/'
+figdir = 'output/figs/mvkv_r2/'
 savefig = True
 os.makedirs(figdir, exist_ok=True)
 
@@ -163,10 +163,12 @@ def make_cbar(axi, m, label,
     cbar.ax.tick_params(labelsize=cbar_fsz) 
     cbar.set_label(label, labelpad=cbar_lab_pad)
 
+
 def crop_img(M, crop):
     r0 = M.shape[0]//2
     M_cropped = M[r0-crop//2:r0+crop//2, r0-crop//2:r0+crop//2]
     return M_cropped
+
 
 def get_img_ct(phantom_id, spec_id, dose, crop=None, units='HU',
                N_matrix=N_matrix, FOV=FOV, ramp=ramp):
@@ -177,6 +179,22 @@ def get_img_ct(phantom_id, spec_id, dose, crop=None, units='HU',
     if crop is not None:
         M = crop_img(M, crop)
     return M
+
+
+def get_img_ct_BHC(phantom_id, spec_id, dose, crop=None, units='HU',
+               N_matrix=N_matrix, FOV=FOV, ramp=ramp, bhc='bone'):
+    assert units=='HU' or units=='raw'
+    assert bhc=='bone' or bhc=='water'
+    if '_' in phantom_id:
+        phantom_id = phantom_id.split('_')[-1]
+    img_dir = f'output/mvkv_r2/{phantom_id}_bhc_{spec_id}/' 
+    fname = f'recon_{bhc}BHC_{units}_float32.bin' 
+    M = np.fromfile(img_dir+fname, dtype=np.float32).reshape([N_matrix, N_matrix])
+    if crop is not None:
+        M = crop_img(M, crop)
+    return M
+
+
 
 def get_img_basismats(phantom_id, spec_id1, spec_id2, dose1, dose2, crop=None,
                       N_matrix=N_matrix, FOV=FOV, ramp=ramp):
@@ -330,19 +348,35 @@ for i, [phantom, Evals] in enumerate([
 
     # single specs
     tlw, col = 1.5, 'k'
+    # for spec, D, ls in  [['80kV', 10, '--'], 
+    #                     ['120kV', 10, ':' ], 
+    #                     ['140kV', 10, '-' ]]:
+
+    #     M = get_img_ct(phantom, spec, D)
+    #     u1, v1 = measure_roi(M, [x0, y0, dx, dy])#, ax=ax[i])   # signal
+    #     u2, v2 = measure_roi(M, [x02, y02, dx, dy])#, ax=ax[i]) # background
+    #     snr = (u1-u2)/np.sqrt(v1 + v2)
+    #     #print(phantom, spec, f'SNR = {snr:.2f}')
+    #     ax[i].axhline(snr, lw=tlw, color=col, ls=ls, label=spec)
+    #     if i==0:
+    #         legend_elements.append(plt.Line2D([0], [0], color=col, ls=ls,  label=spec))
+
     for spec, D, ls in  [['80kV', 10, '--'], 
                         ['120kV', 10, ':' ], 
                         ['140kV', 10, '-' ]]:
-
-        M = get_img_ct(phantom, spec, D)
+        # REVISION 2 : also with BHC
+        bhc_type = 'bone'
+        bhc_col = 'k' # 'darkgray'
+        M = get_img_ct_BHC(phantom, spec, D, bhc=bhc_type)
         u1, v1 = measure_roi(M, [x0, y0, dx, dy])#, ax=ax[i])   # signal
         u2, v2 = measure_roi(M, [x02, y02, dx, dy])#, ax=ax[i]) # background
         snr = (u1-u2)/np.sqrt(v1 + v2)
-        print(phantom, spec, f'SNR = {snr:.3f}')
-        ax[i].axhline(snr, lw=tlw, color=col, ls=ls, label=spec)
+        #print(phantom, spec, f'{bhc_type} BHC  --  SNR = {snr:.2f}')
+        ax[i].axhline(snr, lw=tlw, color=bhc_col, ls=ls,  label=f'{spec}')#' (BHC)')
         if i==0:
-            legend_elements.append(plt.Line2D([0], [0], color=col, ls=ls,  label=spec))
-
+            legend_elements.append(plt.Line2D([0], [0], color=bhc_col, ls=ls,  label=f'{spec}'))#' (BHC)'))
+        
+        
     # dual specs
     for spec1, spec2, D1, D2, ls, sid in [
             ['140kV',     '80kV', 5, 5,  'bs', '140-80kV'],
@@ -360,7 +394,7 @@ for i, [phantom, Evals] in enumerate([
             snrs.append(snr)
              
         # plot and print the maximum
-        print(phantom, sid, f'max SNR = {np.max(snrs):.3f} @ {Evals_all[np.argmax(snrs)]} keV')
+        print(phantom, sid, f'max SNR = {np.max(snrs):.2f} ({Evals_all[np.argmax(snrs)]} keV)')
         ax[i].plot(Evals_all, snrs, ls[0]+'-')
         # add markers to identify curves in black and white
         ax[i].plot(Evals, snrs[::Evals[1]-Evals[0]], ls, markerfacecolor="None")
@@ -380,7 +414,7 @@ plt.subplots_adjust(right=0.86)
 label_panels(ax, dy=0.06)
 
 if savefig:
-    plt.savefig(figdir+f'snr{phantnames}.pdf')
+    plt.savefig(figdir+f'snr{phantnames}_bhc.pdf', bbox_inches='tight')
 plt.show()
 
 
@@ -499,5 +533,187 @@ if savefig:
     plt.savefig(figdir+'metal_LACs.pdf', bbox_inches='tight')
 plt.show()
 
+
+
+    
+
+
+#%% R2 : contrast alone measurements for pelvis w/w/o metal
+
+fig, ax = plt.subplots(1,3, dpi=300, figsize=[8.5, 2.8])
+ax[0].set_ylabel('contrast')
+
+phantnames = f'_{int(100*ramp)}ramp'
+legend_elements = []
+
+for i, [phantom, Evals] in enumerate([
+              ['pelvis',       np.arange(40, 140, 10)], 
+              ['pelvis_titanium',  np.arange(40, 200, 24)], 
+              ['pelvis_steel',  np.arange(40, 200, 24)],  
+            ]):
+    ax[i].set_title(phantom.replace('_', ' with '))
+    
+    xcat = phantom_dict[phantom]
+
+    # single specs
+    tlw, col = 1.5, 'k'
+    # for spec, D, ls in  [['80kV', 10, '--'], 
+    #                     ['120kV', 10, ':' ], 
+    #                     ['140kV', 10, '-' ]]:
+
+    #     M = get_img_ct(phantom, spec, D)
+    #     u1, v1 = measure_roi(M, [x0, y0, dx, dy])#, ax=ax[i])   # signal
+    #     u2, v2 = measure_roi(M, [x02, y02, dx, dy])#, ax=ax[i]) # background
+    #     contrast = np.abs(u1-u2)
+    #     # print(phantom, spec, f'SNR = {snr:.3f}')
+    #     ax[i].axhline(contrast, lw=tlw, color=col, ls=ls, label=spec)
+    #     if i==0:
+    #         legend_elements.append(plt.Line2D([0], [0], color=col, ls=ls,  label=spec))
+
+    for spec, D, ls in  [['80kV', 10, '--'], 
+                        ['120kV', 10, ':' ], 
+                        ['140kV', 10, '-' ]]:
+        # REVISION 2 : also with BHC
+        bhc_type = 'bone'
+        bhc_col = 'k' # 'darkgray'
+        M = get_img_ct_BHC(phantom, spec, D, bhc=bhc_type)
+        u1, v1 = measure_roi(M, [x0, y0, dx, dy])#, ax=ax[i])   # signal
+        u2, v2 = measure_roi(M, [x02, y02, dx, dy])#, ax=ax[i]) # background
+        contrast = np.abs(u1-u2)
+        # print(phantom, spec, f'{bhc_type} BHC  --  SNR = {snr:.3f}')
+        ax[i].axhline(contrast, lw=tlw, color=bhc_col, ls=ls,  label=f'{spec}')# (BHC)')
+        if i==0:
+            legend_elements.append(plt.Line2D([0], [0], color=bhc_col, ls=ls,  label=f'{spec}'))# (BHC)'))
+        
+        
+    # dual specs
+    for spec1, spec2, D1, D2, ls, sid in [
+            ['140kV',     '80kV', 5, 5,  'bs', '140-80kV'],
+            ['detunedMV', '80kV', 9, 1,  'ro', 'MV-80kV']]:
+        
+        M_m1, M_m2 = get_img_basismats(phantom, spec1, spec2, D1, D2)
+        
+        Evals_all = np.arange(Evals[0], Evals[-1]+1, 1)  # get smooth curve
+        contrasts = []
+        for E0 in Evals_all:
+            vmi = make_vmi(E0, M_m1, M_m2)
+            u1, v1 = measure_roi(vmi, [x0, y0, dx, dy])#, ax=ax[i])   # signal
+            u2, v2 = measure_roi(vmi, [x02, y02, dx, dy])#, ax=ax[i]) # background
+            contrast = np.abs(u1-u2)
+            contrasts.append(contrast)
+             
+        # plot and print the maximum
+        # print(phantom, sid, f'max SNR = {np.max(snrs):.3f} @ {Evals_all[np.argmax(snrs)]} keV')
+        ax[i].plot(Evals_all, contrasts, ls[0]+'-')
+        # add markers to identify curves in black and white
+        ax[i].plot(Evals, contrasts[::Evals[1]-Evals[0]], ls, markerfacecolor="None")
+        
+        if i==0:
+            legend_elements.append( plt.Line2D([0], [0], color=ls[0], marker=ls[1], markerfacecolor='None', label=sid) )
+
+for axi in ax:
+    axi.set_xlabel('VMI energy [keV]')
+    tx0, tx1 = axi.get_xlim()
+    ty0, ty1 = axi.get_ylim()
+    axi.set_aspect(0.9*(tx1-tx0)/(ty1-ty0))
+
+fig.tight_layout(pad=1.1)
+fig.legend(handles=legend_elements, loc='center right')
+plt.subplots_adjust(right=0.86)  
+label_panels(ax, dy=0.06)
+
+if savefig:
+    plt.savefig(figdir+f'contrast{phantnames}_bhc.pdf', bbox_inches='tight')
+plt.show()
+
+
+
+#%% R2 : noise alone measurements for pelvis w/w/o metal
+
+fig, ax = plt.subplots(1,3, dpi=300, figsize=[8.5, 2.8])
+ax[0].set_ylabel('noise')
+
+phantnames = f'_{int(100*ramp)}ramp'
+legend_elements = []
+
+for i, [phantom, Evals] in enumerate([
+              ['pelvis',       np.arange(40, 140, 10)], 
+              ['pelvis_titanium',  np.arange(40, 200, 24)], 
+              ['pelvis_steel',  np.arange(40, 200, 24)],  
+            ]):
+    ax[i].set_title(phantom.replace('_', ' with '))
+    
+    xcat = phantom_dict[phantom]
+
+    # single specs
+    tlw, col = 1.5, 'k'
+    # for spec, D, ls in  [['80kV', 10, '--'], 
+    #                     ['120kV', 10, ':' ], 
+    #                     ['140kV', 10, '-' ]]:
+
+    #     M = get_img_ct(phantom, spec, D)
+    #     u1, v1 = measure_roi(M, [x0, y0, dx, dy])#, ax=ax[i])   # signal
+    #     u2, v2 = measure_roi(M, [x02, y02, dx, dy])#, ax=ax[i]) # background
+    #     noise = np.sqrt(v1 + v2)
+    #     # print(phantom, spec, f'SNR = {snr:.3f}')
+    #     ax[i].axhline(noise, lw=tlw, color=col, ls=ls, label=spec)
+    #     if i==0:
+    #         legend_elements.append(plt.Line2D([0], [0], color=col, ls=ls,  label=spec))
+
+    for spec, D, ls in  [['80kV', 10, '--'], 
+                        ['120kV', 10, ':' ], 
+                        ['140kV', 10, '-' ]]:
+        # REVISION 2 : also with BHC
+        bhc_type = 'bone'
+        bhc_col = 'k' #'darkgray'
+        M = get_img_ct_BHC(phantom, spec, D, bhc=bhc_type)
+        u1, v1 = measure_roi(M, [x0, y0, dx, dy])#, ax=ax[i])   # signal
+        u2, v2 = measure_roi(M, [x02, y02, dx, dy])#, ax=ax[i]) # background
+        noise = np.sqrt(v1 + v2)
+        # print(phantom, spec, f'{bhc_type} BHC  --  SNR = {snr:.3f}')
+        ax[i].axhline(noise, lw=tlw, color=bhc_col, ls=ls,  label=f'{spec}')#' (BHC)')
+        if i==0:
+            legend_elements.append(plt.Line2D([0], [0], color=bhc_col, ls=ls,  label=f'{spec}'))#' (BHC)'))
+        
+        
+    # dual specs
+    for spec1, spec2, D1, D2, ls, sid in [
+            ['140kV',     '80kV', 5, 5,  'bs', '140-80kV'],
+            ['detunedMV', '80kV', 9, 1,  'ro', 'MV-80kV']]:
+        
+        M_m1, M_m2 = get_img_basismats(phantom, spec1, spec2, D1, D2)
+        
+        Evals_all = np.arange(Evals[0], Evals[-1]+1, 1)  # get smooth curve
+        noises = []
+        for E0 in Evals_all:
+            vmi = make_vmi(E0, M_m1, M_m2)
+            u1, v1 = measure_roi(vmi, [x0, y0, dx, dy])#, ax=ax[i])   # signal
+            u2, v2 = measure_roi(vmi, [x02, y02, dx, dy])#, ax=ax[i]) # background
+            noise = np.sqrt(v1 + v2)
+            noises.append(noise)
+             
+        # plot and print the maximum
+        # print(phantom, sid, f'max SNR = {np.max(snrs):.3f} @ {Evals_all[np.argmax(snrs)]} keV')
+        ax[i].plot(Evals_all, noises, ls[0]+'-')
+        # add markers to identify curves in black and white
+        ax[i].plot(Evals, noises[::Evals[1]-Evals[0]], ls, markerfacecolor="None")
+        
+        if i==0:
+            legend_elements.append( plt.Line2D([0], [0], color=ls[0], marker=ls[1], markerfacecolor='None', label=sid) )
+
+for axi in ax:
+    axi.set_xlabel('VMI energy [keV]')
+    tx0, tx1 = axi.get_xlim()
+    ty0, ty1 = axi.get_ylim()
+    axi.set_aspect(0.9*(tx1-tx0)/(ty1-ty0))
+
+fig.tight_layout(pad=1.1)
+fig.legend(handles=legend_elements, loc='center right')
+plt.subplots_adjust(right=0.86)  
+label_panels(ax, dy=0.06)
+
+if savefig:
+    plt.savefig(figdir+f'noise{phantnames}_bhc.pdf', bbox_inches='tight')
+plt.show()
 
 
